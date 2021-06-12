@@ -19,8 +19,9 @@ using Test
             c = 2
     """)
 
-    check_keys(dict, has, doesnt) = all([haskey(dict, has) for has in has]) && !any([haskey(dict, doesnt) for doesnt in doesnt])
-    function check_keys(cfg)
+    check_keys(toml, has, doesnt) = all([haskey(toml, has) for has in has]) && !any([haskey(toml, doesnt) for doesnt in doesnt])
+    function check_keys(toml)
+        cfg = Config(toml)
         @test check_keys(cfg[[]], ["a", "b", "c"], ["INHERIT"])
         @test check_keys(cfg[["B"]], ["a", "b", "c"], ["INHERIT"])
         @test check_keys(cfg[["B", "C"]], ["a", "c"], ["INHERIT", "b"])
@@ -29,7 +30,7 @@ using Test
     end
 
     # no args passed
-    let cfg = TOMLConfig.parse_args!(Config(template()), String[])
+    let config = parse_args(Config(template()), String[])
         expected_parsed = TOML.parse(
         """
         a = 0
@@ -47,12 +48,12 @@ using Test
                 b = 0
                 c = 2
         """)
-        check_keys(cfg)
-        @test cfg.leaf == expected_parsed
+        check_keys(config)
+        @test config == expected_parsed
     end
 
     # args passed
-    let cfg = TOMLConfig.parse_args!(Config(template()), ["--b=1", "--B.a=2", "--B.D.c=3"])
+    let config = parse_args(Config(template()), ["--b=1", "--B.a=2", "--B.D.c=3"])
         expected_parsed = TOML.parse(
         """
         a = 0
@@ -70,8 +71,8 @@ using Test
                 b = 1
                 c = 3
         """)
-        check_keys(cfg)
-        @test cfg.leaf == expected_parsed
+        check_keys(config)
+        @test config == expected_parsed
     end
 
 end
