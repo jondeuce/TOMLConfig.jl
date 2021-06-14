@@ -1,4 +1,5 @@
 using TOMLConfig
+using Dates
 using Test
 
 function check_keys(toml::Dict{String}, has, doesnt)
@@ -23,7 +24,7 @@ function typed_isequal(toml1::Dict{String}, toml2::Dict{String})
     end
 end
 
-@testset "simple parsing" begin
+@testset "basic parsing" begin
     template = TOML.parse(
     """
     a = 0
@@ -32,20 +33,51 @@ end
         c = [1, 2]
         [sec1.sub1]
             d = [1.0, 2.0]
+            e = true
+        [sec1.sub2]
+            f = 2010-05-17
+            g = 2013-01-01T00:00:00
+            h = 01:00:00
     """)
+    function check_types(toml)
+        @test typeof(toml["a"]) == Int
+        @test typeof(toml["b"]) == Float64
+        @test typeof(toml["sec1"]["c"]) == Vector{Int}
+        @test typeof(toml["sec1"]["sub1"]["d"]) == Vector{Float64}
+        @test typeof(toml["sec1"]["sub1"]["e"]) == Bool
+        @test typeof(toml["sec1"]["sub2"]["f"]) == Date
+        @test typeof(toml["sec1"]["sub2"]["g"]) == DateTime
+        @test typeof(toml["sec1"]["sub2"]["h"]) == Time
+    end
 
     @testset "no args passed" begin
         parsed_args = parse_args(Config(deepcopy(template)), String[]; as_dict = true)
         expected_parsed = deepcopy(template)
+        check_types(parsed_args)
+        check_types(expected_parsed)
         typed_isequal(parsed_args, expected_parsed)
     end
 
     @testset "args passed" begin
-        parsed_args = parse_args(Config(deepcopy(template)), ["--a", "1", "--sec1.c", "3", "4", "5", "--sec1.sub1.d", "5.5"]; as_dict = true)
+        parsed_args = parse_args(Config(deepcopy(template)), [
+            "--a", "1",
+            "--sec1.c", "3", "4", "5",
+            "--sec1.sub1.d", "5.5",
+            "--sec1.sub2.f", "2021-06-01",
+            "--sec1.sub2.g", "2021-06-01T12:34:56",
+            "--sec1.sub2.h", "01:23:45",
+        ]; as_dict = true)
+
         expected_parsed = deepcopy(template)
         expected_parsed["a"] = 1
         expected_parsed["sec1"]["c"] = [3,4,5]
         expected_parsed["sec1"]["sub1"]["d"] = [5.5]
+        expected_parsed["sec1"]["sub2"]["f"] = Date("2021-06-01")
+        expected_parsed["sec1"]["sub2"]["g"] = DateTime("2021-06-01T12:34:56")
+        expected_parsed["sec1"]["sub2"]["h"] = Time("01:23:45")
+
+        check_types(parsed_args)
+        check_types(expected_parsed)
         typed_isequal(parsed_args, expected_parsed)
     end
 
@@ -55,8 +87,11 @@ end
             ["--b", "e"],
             ["--sec1.c", "3.5", "4"],
             ["--sec1.sub1.d", "f", "g", "h"],
+            ["--sec1.sub2.f", "01:00:00"],
+            ["--sec1.sub2.g", "01:00:00"],
+            ["--sec1.sub2.h", "2013-01-01"],
         ]
-            @test_throws ArgParseError parse_args(Config(deepcopy(template)), args; as_dict = true, exc_handler = ArgParse.debug_handler)
+            @test_throws ArgParseError parse_args(Config(deepcopy(template)), args; exc_handler = ArgParse.debug_handler)
         end
     end
 end

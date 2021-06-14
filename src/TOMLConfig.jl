@@ -1,10 +1,9 @@
 module TOMLConfig
 
+using AbstractTrees, Dates
+
 using Reexport
 @reexport using ArgParse, TOML
-
-import AbstractTrees
-using AbstractTrees: StatelessBFS, PostOrderDFS
 
 export Config
 
@@ -61,7 +60,7 @@ getkey(cfg::Config) = getfield(cfg, :key)
 
 recurse_getindex(d::AbstractDict, keys) = foldl((leaf, k) -> leaf[k], keys; init = d)
 recurse_setindex!(d::AbstractDict, v, keys) = recurse_getindex(d, keys[begin:end-1])[keys[end]] = v
-recurse_convert_keytype(d::AbstractDict, T = Symbol) = Dict(T(k) => v isa AbstractDict ? recurse_convert_keytype(v, T) : v for (k,v) in d)
+recurse_convert_keytype(d::AbstractDict, ::Type{T} = Symbol) where {T} = Dict{T, Any}(T(k) => v isa AbstractDict ? recurse_convert_keytype(v, T) : v for (k,v) in d)
 
 function Base.getproperty(cfg::Config, k::Symbol)
     v = getleaf(cfg)[String(k)]
@@ -142,14 +141,15 @@ function populate!(cfg::Config)
     #   Delete the `_inherit_all_key()` afterwards.
     for node in reverse(collect(StatelessBFS(cfg)))
         parent, leaf = getparent(node), getleaf(node)
-        (parent === nothing) && continue
-        (get(leaf, _inherit_all_key(), nothing) != _inherit_parent_value()) && continue
-        (parent !== nothing && get(leaf, _inherit_all_key(), nothing) == _inherit_parent_value()) || continue
-        for (k,v) in getleaf(parent)
-            (v isa AbstractDict) && continue
-            !haskey(leaf, k) && (leaf[k] = deepcopy(getleaf(parent)[k]))
+        if parent !== nothing && get(leaf, _inherit_all_key(), nothing) == _inherit_parent_value()
+            for (k,v) in getleaf(parent)
+                if !(v isa AbstractDict) && !haskey(leaf, k)
+                    # If key `k` is not already present in the current leaf, inherit value `v` from the parent leaf
+                    leaf[k] = deepcopy(getleaf(parent)[k])
+                end
+            end
+            delete!(leaf, _inherit_all_key())
         end
-        delete!(leaf, _inherit_all_key())
     end
 
     # Step 2:
@@ -157,9 +157,12 @@ function populate!(cfg::Config)
     #   If found, copy default value from the corresponding field in the immediate parent (i.e. non-recursive).
     for node in StatelessBFS(cfg)
         parent, leaf = getparent(node), getleaf(node)
-        (parent === nothing) && continue
-        for (k,v) in leaf
-            (v == _inherit_parent_value()) && (leaf[k] = deepcopy(getleaf(parent)[k]))
+        if parent !== nothing
+            for (k,v) in leaf
+                if v == _inherit_parent_value()
+                    leaf[k] = deepcopy(getleaf(parent)[k])
+                end
+            end
         end
     end
 
@@ -167,7 +170,7 @@ function populate!(cfg::Config)
 end
 
 """
-    argparse_flag(node::Config, k)
+    argparse_flag(node::Config, k::String)
 
 Generate command flag corresponding to nested key `k` in a `Config` node.
 The flag is constructed by joining the keys recursively from the parents
@@ -195,18 +198,17 @@ The corresponding flags that will be generated are
 --sec1$(_flag_delim())sub1$(_flag_delim())d
 ```
 """
-function argparse_flag(node::Config, k)
-    flag = string(k)
+function argparse_flag(node::Config, k::String)
+    flag = k
     while true
         if getparent(node) === nothing
             flag = "--" * flag
-            break
+            return flag
         else
-            flag = string(getkey(node)) * _flag_delim() * flag
+            flag = getkey(node) * _flag_delim() * flag
             node = getparent(node)
         end
     end
-    return flag
 end
 
 """
@@ -247,17 +249,16 @@ function ArgParse.ArgParseSettings(cfg::Config; kwargs...)
     parser = ArgParseSettings(; kwargs...)
     for node in reverse(collect(PostOrderDFS(cfg)))
         for (k,v) in getleaf(node)
-            if v isa AbstractDict
-                continue
+            if !(v isa AbstractDict)
+                props = Dict{Symbol,Any}(:default => deepcopy(v))
+                if v isa AbstractVector
+                    props[:arg_type] = eltype(v)
+                    props[:nargs] = '*'
+                else
+                    props[:arg_type] = typeof(v)
+                end
+                add_arg_table!(parser, argparse_flag(node, k), props)
             end
-            props = Dict{Symbol,Any}(:default => deepcopy(v))
-            if v isa AbstractVector
-                props[:arg_type] = eltype(v)
-                props[:nargs] = '*'
-            else
-                props[:arg_type] = typeof(v)
-            end
-            add_arg_table!(parser, argparse_flag(node, k), props)
         end
     end
     return parser
