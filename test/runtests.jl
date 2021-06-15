@@ -39,7 +39,7 @@ end
             g = 2013-01-01T00:00:00
             h = 01:00:00
     """)
-    function check_types(toml)
+    function check_parsed_types(toml::Dict{String})
         @test typeof(toml["a"]) == Int
         @test typeof(toml["b"]) == Float64
         @test typeof(toml["sec1"]["c"]) == Vector{Int}
@@ -53,8 +53,8 @@ end
     @testset "no args passed" begin
         parsed_args = parse_args(Config(deepcopy(template)), String[]; as_dict = true)
         expected_parsed = deepcopy(template)
-        check_types(parsed_args)
-        check_types(expected_parsed)
+        check_parsed_types(parsed_args)
+        check_parsed_types(expected_parsed)
         typed_isequal(parsed_args, expected_parsed)
     end
 
@@ -76,8 +76,8 @@ end
         expected_parsed["sec1"]["sub2"]["g"] = DateTime("2021-06-01T12:34:56")
         expected_parsed["sec1"]["sub2"]["h"] = Time("01:23:45")
 
-        check_types(parsed_args)
-        check_types(expected_parsed)
+        check_parsed_types(parsed_args)
+        check_parsed_types(expected_parsed)
         typed_isequal(parsed_args, expected_parsed)
     end
 
@@ -103,22 +103,22 @@ end
     b = 0.0
     c = "c"
     [sec1]
-        INHERIT = "%PARENT%"
+        _INHERIT_ = "_PARENT_"
         a = 1
         [sec1.sub1]
-            INHERIT = "%PARENT%"
+            _INHERIT_ = "_PARENT_"
             c = "d"
         [sec1.sub2]
-            INHERIT = "%PARENT%"
-            b = "%PARENT%"
+            _INHERIT_ = "_PARENT_"
+            b = "_PARENT_"
             c = "d"
     """)
 
-    function check_parsed_keys(toml)
-        check_keys(toml, ["a", "b", "c"], ["INHERIT"])
-        check_keys(toml["sec1"], ["a", "b", "c"], ["INHERIT"])
-        check_keys(toml["sec1"]["sub1"], ["a", "c"], ["INHERIT", "b"])
-        check_keys(toml["sec1"]["sub2"], ["a", "b", "c"], ["INHERIT"])
+    function check_parsed_keys(toml::Dict{String})
+        check_keys(toml, ["a", "b", "c"], ["_INHERIT_"])
+        check_keys(toml["sec1"], ["a", "b", "c"], ["_INHERIT_"])
+        check_keys(toml["sec1"]["sub1"], ["a", "c"], ["_INHERIT_", "b"])
+        check_keys(toml["sec1"]["sub2"], ["a", "b", "c"], ["_INHERIT_"])
     end
 
     @testset "no args passed" begin
@@ -166,4 +166,19 @@ end
         check_parsed_keys(parsed_args)
         typed_isequal(parsed_args, expected_parsed)
     end
+end
+
+@testset "customizing arg table" begin
+    template = TOML.parse(
+    """
+    [a]
+        _ARG_ = "_REQUIRED_"
+        nargs = 2
+        required = true
+        help = "help string"
+    [b]
+        _ARG_ = [1.0, 2.0]
+        help = "help string"
+    """)
+    parsed_args = parse_args(Config(deepcopy(template)), String["--a", "1", "2"]; as_dict = true)
 end

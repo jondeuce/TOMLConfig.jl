@@ -13,12 +13,12 @@ export Config
 
 Basic tree structure for navigating TOML file contents.
 Each `Config` leaf node represents a single section of a TOML file.
-Children of a `Config` node are the corresponding subsections, if they exist.
+Children of a `Config` node are the corresponding TOML subsections, if they exist.
 
-# Example
+# Examples
 
-```julia
-julia>cfg = Config(TOML.parse(
+```jldoctest
+julia> cfg = Config(TOML.parse(
     \"\"\"
     a = 1
 
@@ -28,7 +28,6 @@ julia>cfg = Config(TOML.parse(
         [sec1.sub1]
         c = 3
     \"\"\"))
-
 TOML Config with contents:
 
 a = 1
@@ -38,6 +37,19 @@ b = 2
 
     [sec1.sub1]
     c = 3
+
+julia> cfg.sec1
+TOML Config with contents:
+
+b = 2
+
+[sub1]
+c = 3
+
+julia> cfg.sec1.sub1
+TOML Config with contents:
+
+c = 3
 ```
 """
 struct Config
@@ -73,7 +85,7 @@ end
 Base.setproperty!(cfg::Config, k::Symbol, v) = getleaf(cfg)[String(k)] = v
 
 AbstractTrees.nodetype(::Config) = Config
-AbstractTrees.children(parent::Config) = [Config(leaf, parent, key) for (key, leaf) in getleaf(parent) if leaf isa AbstractDict]
+AbstractTrees.children(parent::Config) = [Config(leaf, parent, key) for (key, leaf) in getleaf(parent) if leaf isa AbstractDict && _arg_table_key() ∉ keys(leaf)]
 
 function AbstractTrees.printnode(io::IO, cfg::Config)
     if getkey(cfg) !== nothing
@@ -88,10 +100,16 @@ function Base.show(io::IO, ::MIME"text/plain", cfg::Config)
 end
 
 const parsing_settings = Dict{String, String}(
-    "inherit_all_key"      => "INHERIT",
-    "inherit_parent_value" => "%PARENT%",
+    "arg_table_key"        => "_ARG_",
+    "arg_table_required"   => "_REQUIRED_",
+    "inherit_all_key"      => "_INHERIT_",
+    "inherit_parent_value" => "_PARENT_",
     "flag_delim"           => ".",
 )
+_arg_table_key()          = parsing_settings["arg_table_key"]
+_arg_table_key!(v)        = parsing_settings["arg_table_key"] = String(v)
+_arg_table_required()     = parsing_settings["arg_table_required"]
+_arg_table_required!(v)   = parsing_settings["arg_table_required"] = String(v)
 _inherit_all_key()        = parsing_settings["inherit_all_key"]
 _inherit_all_key!(v)      = parsing_settings["inherit_all_key"] = String(v)
 _inherit_parent_value()   = parsing_settings["inherit_parent_value"]
@@ -104,10 +122,10 @@ _flag_delim!(v)           = parsing_settings["flag_delim"] = String(v)
 
 Populate fields of TOML config which are specified to have default values inherited from parent sections.
 
-# Example
+# Examples
 
-```julia
-julia>cfg = TOMLConfig.populate!(Config(TOML.parse(
+```jldoctest
+julia> cfg = TOMLConfig.populate!(Config(TOML.parse(
     \"\"\"
     a = 1
     b = 2
@@ -119,7 +137,6 @@ julia>cfg = TOMLConfig.populate!(Config(TOML.parse(
         [sec1.sub1]
         $(_inherit_all_key()) = \"$(_inherit_parent_value())\"
     \"\"\")))
-
 TOML Config with contents:
 
 b = 2
@@ -176,10 +193,10 @@ Generate command flag corresponding to nested key `k` in a `Config` node.
 The flag is constructed by joining the keys recursively from the parents
 of the current node using the delimiter `_flag_delim()` and prepending "--".
 
-# Example
+# Examples
 
 Given a `Config` node with contents
-```julia
+```jldoctest
 a = 1
 b = 2
 
@@ -191,7 +208,7 @@ c = 3
 ```
 
 The corresponding flags that will be generated are
-```julia
+```jldoctest
 --a
 --b
 --sec1$(_flag_delim())c
@@ -216,10 +233,10 @@ end
 
 Generate `ArgParseSettings` parser from `Config`.
 
-# Example
+# Examples
 
-```julia
-julia>cfg = Config(TOML.parse(
+```jldoctest
+julia> cfg = Config(TOML.parse(
     \"\"\"
     a = 1.0
     b = 2
@@ -231,9 +248,9 @@ julia>cfg = Config(TOML.parse(
         d = "d"
     \"\"\"));
 
-julia>parser = ArgParseSettings(cfg);
+julia> parser = ArgParseSettings(cfg);
 
-julia>ArgParse.show_help(parser; exit_when_done = false)
+julia> ArgParse.show_help(parser; exit_when_done = false)
 usage: <PROGRAM> [--b B] [--a A] [--sec1.c [SEC1.C...]]
                  [--sec1.sub1.d SEC1.SUB1.D]
 
@@ -249,8 +266,18 @@ function ArgParse.ArgParseSettings(cfg::Config; kwargs...)
     parser = ArgParseSettings(; kwargs...)
     for node in reverse(collect(PostOrderDFS(cfg)))
         for (k,v) in getleaf(node)
-            if !(v isa AbstractDict)
-                props = Dict{Symbol,Any}(:default => deepcopy(v))
+            if v isa AbstractDict
+                if _arg_table_key() ∈ keys(v)
+                    props = delete!(deepcopy(v), _arg_table_key())
+                    props = recurse_convert_keytype(props, Symbol)
+                    if v[_arg_table_key()] != _arg_table_required()
+                        props[:default] = deepcopy(v[_arg_table_key()])
+                    end
+                    add_arg_table!(parser, argparse_flag(node, k), props)
+                end
+            else
+                props = Dict{Symbol,Any}()
+                props[:default] = deepcopy(v)
                 if v isa AbstractVector
                     props[:arg_type] = eltype(v)
                     props[:nargs] = '*'
@@ -313,10 +340,10 @@ Parse TOML configuration struct with command line arguments `args`.
 * `flag_delim`: command line flags for keys in nested TOML sections are formed by joining all parent keys together with this delimiter
 * `kwargs`: remaining keyword arguments are forwarded to `ArgParseSettings` constructor internally
 
-# Example
+# Examples
 
-```julia
-julia>cfg = Config(TOML.parse(
+```jldoctest
+julia> cfg = Config(TOML.parse(
     \"\"\"
     a = 1
     b = 2
@@ -329,7 +356,7 @@ julia>cfg = Config(TOML.parse(
         $(_inherit_all_key()) = \"$(_inherit_parent_value())\"
     \"\"\"));
 
-julia>parsed_args = parse_args(cfg, ["--a", "3", "--sec1.b", "5", "--sec1.c", "10"]);
+julia> parsed_args = parse_args(cfg, ["--a", "3", "--sec1.b", "5", "--sec1.c", "10"]);
 TOML Config with contents:
 
 b = 2
