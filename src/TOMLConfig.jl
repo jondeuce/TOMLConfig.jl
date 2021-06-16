@@ -118,14 +118,14 @@ _flag_delim()             = parsing_settings["flag_delim"]
 _flag_delim!(v)           = parsing_settings["flag_delim"] = String(v)
 
 """
-    populate!(cfg::Config)
+    defaults!(cfg::Config)
 
 Populate fields of TOML config which are specified to have default values inherited from parent sections.
 
 # Examples
 
 ```jldoctest
-julia> cfg = TOMLConfig.populate!(Config(TOML.parse(
+julia> cfg = TOMLConfig.defaults!(Config(TOML.parse(
     \"\"\"
     a = 1
     b = 2
@@ -151,7 +151,7 @@ b = 2
     b = 2
 ```
 """
-function populate!(cfg::Config)
+function defaults!(cfg::Config)
     # Step 1:
     #   Inverted breadth-first search for `_inherit_all_key()` with value `_inherit_parent_value()`.
     #   If found, copy all key-value pairs from the immediate parent (i.e. non-recursive) into the node containing `_inherit_all_key()`.
@@ -229,9 +229,9 @@ function argparse_flag(node::Config, k::String)
 end
 
 """
-    ArgParseSettings(cfg::Config)
+    ArgParse.add_arg_table!(settings::ArgParseSettings, cfg::Config)
 
-Generate `ArgParseSettings` parser from `Config`.
+Populate `settings` argument table using configuration `cfg`.
 
 # Examples
 
@@ -248,9 +248,9 @@ julia> cfg = Config(TOML.parse(
         d = "d"
     \"\"\"));
 
-julia> parser = ArgParseSettings(cfg);
+julia> settings = add_arg_table!(ArgParseSettings(), cfg);
 
-julia> ArgParse.show_help(parser; exit_when_done = false)
+julia> ArgParse.show_help(settings; exit_when_done = false)
 usage: <PROGRAM> [--b B] [--a A] [--sec1.c [SEC1.C...]]
                  [--sec1.sub1.d SEC1.SUB1.D]
 
@@ -262,21 +262,48 @@ optional arguments:
                         (default: "d")
 ```
 """
-function ArgParse.ArgParseSettings(cfg::Config; kwargs...)
-    parser = ArgParseSettings(; kwargs...)
+function ArgParse.add_arg_table!(settings::ArgParseSettings, cfg::Config)
+    # Populate settings argument table
     for node in reverse(collect(PostOrderDFS(cfg)))
         for (k,v) in getleaf(node)
             if v isa AbstractDict
                 if _arg_table_key() ∈ keys(v)
-                    props = delete!(deepcopy(v), _arg_table_key())
+                    props, v = v, v[_arg_table_key()]
+                    props = delete!(deepcopy(props), _arg_table_key())
                     props = recurse_convert_keytype(props, Symbol)
-                    if v[_arg_table_key()] != _arg_table_required()
-                        props[:default] = deepcopy(v[_arg_table_key()])
+
+                    # Special-casing specific properties
+                    if :arg_type ∈ keys(props)
+                        arg_type_dict = Dict{String, DataType}("Any" => Any, "DateTime" => DateTime, "Time" => Time, "Date" => Date, "Bool" => Bool, "Int64" => Int64, "Float64" => Float64, "String" => String)
+                        @assert props[:arg_type] ∈ keys(arg_type_dict)
+                        props[:arg_type] = arg_type_dict[props[:arg_type]]
                     end
-                    add_arg_table!(parser, argparse_flag(node, k), props)
+
+                    if :nargs ∈ keys(props)
+                        nargs_dict = Dict{String, Char}("A" => 'A',"?" => '?',"*" => '*',"+" => '+',"R" => 'R')
+                        @assert props[:nargs] isa Int || props[:nargs] ∈ keys(nargs_dict)
+                        if !(props[:nargs] isa Int)
+                            props[:nargs] = nargs_dict[props[:nargs]]
+                        end
+                    end
+
+                    if v == _arg_table_required()
+                        get!(props, :required, true)
+                    else
+                        get!(props, :required, false)
+                        get!(props, :default, deepcopy(v))
+                        if v isa AbstractVector
+                            get!(props, :arg_type, eltype(v))
+                            get!(props, :nargs, '*')
+                        else
+                            get!(props, :arg_type, typeof(v))
+                        end
+                    end
+                    add_arg_table!(settings, argparse_flag(node, k), props)
                 end
             else
                 props = Dict{Symbol,Any}()
+                props[:required] = false
                 props[:default] = deepcopy(v)
                 if v isa AbstractVector
                     props[:arg_type] = eltype(v)
@@ -284,19 +311,20 @@ function ArgParse.ArgParseSettings(cfg::Config; kwargs...)
                 else
                     props[:arg_type] = typeof(v)
                 end
-                add_arg_table!(parser, argparse_flag(node, k), props)
+                add_arg_table!(settings, argparse_flag(node, k), props)
             end
         end
     end
-    return parser
+
+    return settings
 end
 
-function parse!(cfg::Config, args, parser::ArgParseSettings; filter_args = false)
+function parse!(cfg::Config, args_list, settings::ArgParseSettings; explicit_args_only = false)
     # Parse and merge into config
-    for (k,v) in parse_args(args, parser)
-        if filter_args
-            # Only update `cfg` with new value if it was explicitly passed in `args`
-            !any(startswith("--" * k), args) && continue
+    for (k,v) in parse_args(args_list, settings)
+        if explicit_args_only
+            # Only update `cfg` with new value if it was explicitly passed in `args_list`
+            !any(startswith("--" * k), args_list) && continue
         end
         ks = String.(split(k, _flag_delim()))
         recurse_setindex!(getleaf(cfg), deepcopy(v), ks)
@@ -304,41 +332,33 @@ function parse!(cfg::Config, args, parser::ArgParseSettings; filter_args = false
     return cfg
 end
 
-function parse!(cfg::Config, args; kwargs...)
-
-    default_parser = ArgParseSettings(populate!(deepcopy(cfg)); kwargs...)
-    parse!(cfg, args, default_parser; filter_args = true)
-    updated_parser = ArgParseSettings(populate!(cfg); kwargs...)
-    parse!(cfg, args, updated_parser)
-
-    return cfg
-end
-
 """
     ArgParse.parse_args(
-        cfg::Config,
-        args = isinteractive() ? String[] : ARGS;
+        [args_list::Vector, [settings::ArgParseSettings,]] cfg::Config;
         as_dict = false,
         as_symbols = false,
+        arg_table_key = "$(_arg_table_key())",
+        arg_table_required = "$(_arg_table_required())",
         inherit_all_key = "$(_inherit_all_key())",
         inherit_parent_value = "$(_inherit_parent_value())",
         flag_delim = "$(_flag_delim())",
-        kwargs...
     )
 
-Parse TOML configuration struct with command line arguments `args`.
+Parse TOML configuration struct with command line arguments `args_list`.
 
 # Arguments:
+* `args_list::Vector`: vector of arguments to be parsed
+* `settings::ArgParseSettings`: settings struct which will be configured according to `cfg`
 * `cfg::Config`: TOML configuration settings
-* `args`: vector of arguments to be parsed
 
 # Keywords:
 * `as_dict`: if true, return config as a dictionary with `String` keys, otherwise return a `Config` struct
 * `as_symbols`: if true and `as_dict=true`, return config dictionary with `Symbol` keys
+* `arg_table_key`: if this key is found in a TOML section, the rest of the section is interpreted as properties for the argument table entry
+* `arg_table_required`: if this value is found in a TOML section, the `required = true` is passed to the argument table entry
 * `inherit_all_key`: if this key is found in a TOML section, all fields from the immediate parent section (i.e., non-recursive) should be inherited
 * `inherit_parent_value`: if this value is found in a TOML section, it is replaced with the value corresponding to the same key in the immediate parent section (i.e., non-recursive)
 * `flag_delim`: command line flags for keys in nested TOML sections are formed by joining all parent keys together with this delimiter
-* `kwargs`: remaining keyword arguments are forwarded to `ArgParseSettings` constructor internally
 
 # Examples
 
@@ -372,19 +392,27 @@ b = 5
 ```
 """
 function ArgParse.parse_args(
-        cfg::Config,
-        args::AbstractVector{<:AbstractString} = isinteractive() ? String[] : ARGS;
+        args_list::Vector,
+        settings::ArgParseSettings,
+        cfg::Config;
         as_dict::Bool                          = false,
         as_symbols::Bool                       = false,
+        arg_table_key::AbstractString          = _arg_table_key(),
+        arg_table_required::AbstractString     = _arg_table_required(),
         inherit_all_key::AbstractString        = _inherit_all_key(),
         inherit_parent_value::AbstractString   = _inherit_parent_value(),
         flag_delim::AbstractString             = _flag_delim(),
-        kwargs...
     )
+    # Set parsing defaults
+    _arg_table_key!(arg_table_key)
+    _arg_table_required!(arg_table_required)
     _inherit_all_key!(inherit_all_key)
     _inherit_parent_value!(inherit_parent_value)
     _flag_delim!(flag_delim)
-    cfg = parse!(deepcopy(cfg), args; kwargs...)
+
+    settings, cfg = deepcopy(settings), deepcopy(cfg)
+    parse!(cfg, args_list, add_arg_table!(deepcopy(settings), defaults!(deepcopy(cfg))); explicit_args_only = true)
+    parse!(cfg, args_list, add_arg_table!(settings, defaults!(cfg)); explicit_args_only = false)
 
     if as_dict
         if as_symbols
@@ -396,5 +424,8 @@ function ArgParse.parse_args(
         return cfg
     end
 end
+ArgParse.parse_args(cfg::Config; kwargs...) = parse_args(ArgParseSettings(), cfg; kwargs...)
+ArgParse.parse_args(settings::ArgParseSettings, cfg::Config; kwargs...) = parse_args(ARGS, settings, cfg; kwargs...)
+ArgParse.parse_args(args_list::Vector, cfg::Config; kwargs...) = parse_args(args_list, ArgParseSettings(), cfg; kwargs...)
 
 end # module TOMLConfig

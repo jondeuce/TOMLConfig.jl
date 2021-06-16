@@ -39,6 +39,7 @@ end
             g = 2013-01-01T00:00:00
             h = 01:00:00
     """)
+
     function check_parsed_types(toml::Dict{String})
         @test typeof(toml["a"]) == Int
         @test typeof(toml["b"]) == Float64
@@ -51,7 +52,7 @@ end
     end
 
     @testset "no args passed" begin
-        parsed_args = parse_args(Config(deepcopy(template)), String[]; as_dict = true)
+        parsed_args = parse_args(String[], Config(deepcopy(template)); as_dict = true)
         expected_parsed = deepcopy(template)
         check_parsed_types(parsed_args)
         check_parsed_types(expected_parsed)
@@ -59,14 +60,15 @@ end
     end
 
     @testset "args passed" begin
-        parsed_args = parse_args(Config(deepcopy(template)), [
+        args_list = [
             "--a", "1",
             "--sec1.c", "3", "4", "5",
             "--sec1.sub1.d", "5.5",
             "--sec1.sub2.f", "2021-06-01",
             "--sec1.sub2.g", "2021-06-01T12:34:56",
             "--sec1.sub2.h", "01:23:45",
-        ]; as_dict = true)
+        ]
+        parsed_args = parse_args(args_list, Config(deepcopy(template)); as_dict = true)
 
         expected_parsed = deepcopy(template)
         expected_parsed["a"] = 1
@@ -82,7 +84,7 @@ end
     end
 
     @testset "mistyped args" begin
-        for args in [
+        for args_list in [
             ["--a", "1.5"],
             ["--b", "e"],
             ["--sec1.c", "3.5", "4"],
@@ -91,7 +93,8 @@ end
             ["--sec1.sub2.g", "01:00:00"],
             ["--sec1.sub2.h", "2013-01-01"],
         ]
-            @test_throws ArgParseError parse_args(Config(deepcopy(template)), args; exc_handler = ArgParse.debug_handler)
+            settings = ArgParseSettings(exc_handler = ArgParse.debug_handler)
+            @test_throws ArgParseError parse_args(args_list, settings, Config(deepcopy(template)))
         end
     end
 end
@@ -122,7 +125,7 @@ end
     end
 
     @testset "no args passed" begin
-        parsed_args = parse_args(Config(deepcopy(template)), String[]; as_dict = true)
+        parsed_args = parse_args(String[], Config(deepcopy(template)); as_dict = true)
         expected_parsed = TOML.parse(
         """
         a = 0
@@ -145,7 +148,8 @@ end
     end
 
     @testset "args passed" begin
-        parsed_args = parse_args(Config(deepcopy(template)), ["--b=1.0", "--sec1.a=2", "--sec1.sub2.c=e"]; as_dict = true)
+        args_list = ["--b=1.0", "--sec1.a=2", "--sec1.sub2.c=e"]
+        parsed_args = parse_args(args_list, Config(deepcopy(template)); as_dict = true)
         expected_parsed = TOML.parse(
         """
         a = 0
@@ -174,11 +178,15 @@ end
     [a]
         _ARG_ = "_REQUIRED_"
         nargs = 2
+        arg_type = "Float64"
         required = true
         help = "help string"
     [b]
         _ARG_ = [1.0, 2.0]
         help = "help string"
+    [sub]
+        b = "_PARENT_"
     """)
-    parsed_args = parse_args(Config(deepcopy(template)), String["--a", "1", "2"]; as_dict = true)
+    args_list = ["--a", "1", "2"]
+    parsed_args = parse_args(args_list, Config(deepcopy(template)))
 end
