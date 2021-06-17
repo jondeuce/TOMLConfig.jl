@@ -7,6 +7,12 @@ using Reexport
 
 export Config
 
+if isdefined(Base, :Experimental) && isdefined(Base.Experimental, Symbol("@compiler_options"))
+    @eval Base.Experimental.@compiler_options compile=min optimize=0 infer=false
+end
+
+@nospecialize # use only declared type signatures, helps with compile time
+
 """
     Config(tree::AbstractDict{String})
     Config(; filename::String)
@@ -66,9 +72,17 @@ Config(tree::AbstractDict{String}) = Config(tree, nothing, nothing)
 Config(; filename::String) = Config(TOML.parsefile(filename))
 
 # Define getters to access struct fields, since `getproperty` is overloaded for convenience below
-getleaf(cfg::Config) = getfield(cfg, :leaf)
-getparent(cfg::Config) = getfield(cfg, :parent)
-getkey(cfg::Config) = getfield(cfg, :key)
+get_leaf(cfg::Config) = getfield(cfg, :leaf)
+get_parent(cfg::Config) = getfield(cfg, :parent)
+get_key(cfg::Config) = getfield(cfg, :key)
+
+is_child(v) = !is_arg(v)
+is_arg(v) = !(v isa AbstractDict) || is_arg_dict(v)
+is_arg_dict(v) = v isa AbstractDict && arg_key() ∈ keys(v)
+arg_props(v::AbstractDict{String}) = recurse_convert_keytype(delete!(deepcopy(v), arg_key()), Symbol)
+arg_value(v) = is_arg_dict(v) ? deepcopy(v[arg_key()]) : deepcopy(v)
+arg_value(d::AbstractDict{String}, k::String) = arg_value(d[k])
+arg_value!(d::AbstractDict{String}, v, k::String) = is_arg_dict(d[k]) ? (d[k][arg_key()] = deepcopy(v)) : (d[k] = deepcopy(v))
 
 recurse_getindex(d::AbstractDict, keys) = foldl((leaf, k) -> leaf[k], keys; init = d)
 recurse_setindex!(d::AbstractDict, v, keys) = recurse_getindex(d, keys[begin:end-1])[keys[end]] = v
@@ -77,28 +91,28 @@ recurse_convert_valtype(d::AbstractDict, ::Type{V} = Symbol) where {V} = Dict{ke
 recurse_convert_keyvaltype(d::AbstractDict, ::Type{K} = Symbol, ::Type{V} = Symbol) where {K, V} = Dict{K, Any}(K(k) => v isa AbstractDict ? recurse_convert_keyvaltype(v, K, V) : V(v) for (k,v) in d)
 
 function Base.getproperty(cfg::Config, k::Symbol)
-    v = getleaf(cfg)[String(k)]
+    v = get_leaf(cfg)[String(k)]
     if v isa AbstractDict
         Config(v, cfg, String(k))
     else
         v
     end
 end
-Base.setproperty!(cfg::Config, k::Symbol, v) = getleaf(cfg)[String(k)] = v
+Base.setproperty!(cfg::Config, k::Symbol, v) = get_leaf(cfg)[String(k)] = v
 
 AbstractTrees.nodetype(::Config) = Config
-AbstractTrees.children(parent::Config) = [Config(leaf, parent, key) for (key, leaf) in getleaf(parent) if leaf isa AbstractDict && arg_key() ∉ keys(leaf)]
+AbstractTrees.children(parent::Config) = [Config(leaf, parent, key) for (key, leaf) in get_leaf(parent) if is_child(leaf)]
 
 function AbstractTrees.printnode(io::IO, cfg::Config)
-    if getkey(cfg) !== nothing
-        println(io, getkey(cfg) * ":")
+    if get_key(cfg) !== nothing
+        println(io, get_key(cfg) * ":")
     end
-    print(io, join(["$k = $v" for (k,v) in getleaf(cfg) if !(v isa AbstractDict)], "\n"))
+    print(io, join(["$k = $v" for (k,v) in get_leaf(cfg) if !(v isa AbstractDict)], "\n"))
 end
 
 function Base.show(io::IO, ::MIME"text/plain", cfg::Config)
     println(io, "TOML Config with contents:\n")
-    TOML.print(io, getleaf(cfg))
+    TOML.print(io, get_leaf(cfg))
 end
 
 default_parser_settings() = Dict{String, String}(
@@ -181,18 +195,31 @@ b = 2
     b = 2
 ```
 """
-function defaults!(cfg::Config)
+function defaults!(cfg::Config; replace_arg_dicts = false)
+    # Step 0:
+    #   Breadth-first search to replace arg table dictionaries with default values, which may be "_PARENT_"
+    if replace_arg_dicts
+        for node in StatelessBFS(cfg)
+            leaf = get_leaf(node)
+            for (k,v) in leaf
+                if is_arg_dict(v)
+                    leaf[k] = arg_value(v)
+                end
+            end
+        end
+    end
+
     # Step 1:
-    #   Inverted breadth-first search for `inherit_all_key()` with value `inherit_parent_value()`.
-    #   If found, copy all key-value pairs from the immediate parent (i.e. non-recursive) into the node containing `inherit_all_key()`.
-    #   Delete the `inherit_all_key()` afterwards.
+    #   Inverted breadth-first search for "_INHERIT_" keys with value "_PARENT_".
+    #   If found, copy all key-value pairs from the immediate parent (i.e. non-recursive) into the node containing "_INHERIT_".
+    #   Delete the "_INHERIT_" afterwards.
     for node in reverse(collect(StatelessBFS(cfg)))
-        parent, leaf = getparent(node), getleaf(node)
-        if parent !== nothing && get(leaf, inherit_all_key(), nothing) == inherit_parent_value()
-            for (k,v) in getleaf(parent)
-                if !(v isa AbstractDict) && !haskey(leaf, k)
-                    # If key `k` is not already present in the current leaf, inherit value `v` from the parent leaf
-                    leaf[k] = deepcopy(getleaf(parent)[k])
+        parent, leaf = get_parent(node), get_leaf(node)
+        if parent !== nothing && haskey(leaf, inherit_all_key()) && leaf[inherit_all_key()] == inherit_parent_value()
+            for (k,v) in get_leaf(parent)
+                if is_arg(v) && !haskey(leaf, k)
+                    # If key `k` is not already present in the current leaf, inherit arg (possibly an arg dict) from the parent leaf
+                    leaf[k] = deepcopy(v)
                 end
             end
             delete!(leaf, inherit_all_key())
@@ -200,14 +227,15 @@ function defaults!(cfg::Config)
     end
 
     # Step 2:
-    #   Breadth-first search for fields with value `inherit_parent_value()`.
+    #   Breadth-first search for fields with value "_PARENT_".
     #   If found, copy default value from the corresponding field in the immediate parent (i.e. non-recursive).
     for node in StatelessBFS(cfg)
-        parent, leaf = getparent(node), getleaf(node)
+        parent, leaf = get_parent(node), get_leaf(node)
         if parent !== nothing
             for (k,v) in leaf
-                if v == inherit_parent_value()
-                    leaf[k] = deepcopy(getleaf(parent)[k])
+                if arg_value(v) == inherit_parent_value()
+                    # Set arg value to the arg value of the parent (both parent and/or child may be arg dicts)
+                    arg_value!(leaf, arg_value(get_leaf(parent), k), k)
                 end
             end
         end
@@ -217,7 +245,7 @@ function defaults!(cfg::Config)
 end
 
 """
-    argparse_flag(node::Config, k::String)
+    arg_table_flag(node::Config, k::String)
 
 Generate command flag corresponding to nested key `k` in a `Config` node.
 The flag is constructed by joining the keys recursively from the parents
@@ -245,15 +273,15 @@ The corresponding flags that will be generated are
 --sec1$(flag_delim())sub1$(flag_delim())d
 ```
 """
-function argparse_flag(node::Config, k::String)
+function arg_table_flag(node::Config, k::String)
     flag = k
     while true
-        if getparent(node) === nothing
+        if get_parent(node) === nothing
             flag = "--" * flag
             return flag
         else
-            flag = getkey(node) * flag_delim() * flag
-            node = getparent(node)
+            flag = get_key(node) * flag_delim() * flag
+            node = get_parent(node)
         end
     end
 end
@@ -295,8 +323,8 @@ optional arguments:
 function ArgParse.add_arg_table!(settings::ArgParseSettings, cfg::Config)
     # Populate settings argument table
     for node in reverse(collect(PostOrderDFS(cfg)))
-        for (k,v) in getleaf(node)
-            if !(v isa AbstractDict)
+        for (k,v) in get_leaf(node)
+            if is_arg(v) && !is_arg_dict(v)
                 # Add to arg table using specified value as the default
                 props = Dict{Symbol,Any}()
                 props[:default] = deepcopy(v)
@@ -309,12 +337,10 @@ function ArgParse.add_arg_table!(settings::ArgParseSettings, cfg::Config)
                     props[:arg_type] = typeof(v)
                 end
 
-                add_arg_table!(settings, argparse_flag(node, k), props)
+                add_arg_table!(settings, arg_table_flag(node, k), props)
 
-            elseif arg_key() ∈ keys(v)
-                props, v = deepcopy(v), v[arg_key()]
-                props = delete!(props, arg_key())
-                props = recurse_convert_keytype(props, Symbol)
+            elseif is_arg_dict(v)
+                props, v = arg_props(v), arg_value(v)
 
                 # Special-casing specific properties
                 if :arg_type ∈ keys(props)
@@ -345,7 +371,7 @@ function ArgParse.add_arg_table!(settings::ArgParseSettings, cfg::Config)
                     end
                 end
 
-                add_arg_table!(settings, argparse_flag(node, k), props)
+                add_arg_table!(settings, arg_table_flag(node, k), props)
             end
         end
     end
@@ -425,7 +451,7 @@ function parse_args!(
     parser_settings!(; kwargs...)
 
     # Populate all "_INHERIT_" keys and/or "_PARENT_" values to establish defaults
-    default_cfg = defaults!(deepcopy(cfg))
+    default_cfg = defaults!(deepcopy(cfg); replace_arg_dicts = false)
 
     # Add arg table entries to `settings` dynamically using default `cfg` specification
     add_arg_table!(settings, default_cfg)
@@ -435,19 +461,19 @@ function parse_args!(
         if any(startswith("--" * k), args_list)
             # Only update `cfg` with new value if it was explicitly passed in `args_list`
             keys = String.(split(k, flag_delim()))
-            recurse_setindex!(getleaf(cfg), deepcopy(v), keys)
+            recurse_setindex!(get_leaf(cfg), deepcopy(v), keys)
         end
     end
 
     # Populate remaining "_INHERIT_" keys and/or "_PARENT_" values which were not overridden by `args_list`
-    defaults!(cfg)
+    defaults!(cfg; replace_arg_dicts = true)
 
     # Return parsed config
     if as_dict
         if as_symbols
-            return recurse_convert_keytype(getleaf(cfg), Symbol)
+            return recurse_convert_keytype(get_leaf(cfg), Symbol)
         else
-            return getleaf(cfg)
+            return get_leaf(cfg)
         end
     else
         return cfg
