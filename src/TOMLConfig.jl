@@ -156,7 +156,7 @@ function parser_settings!(; kwargs...)
         if k ∈ keys(parser_settings())
             parser_settings()[k] = string(v)
         else
-            error("Unknown parser setting: $(k). Possible settings are: $(join(sort(collect(keys(default_parser_settings()))), ", ")).")
+            error("Invalid parser setting: $(k). Possible settings are: $(join(sort(collect(keys(default_parser_settings()))), ", ")).")
         end
     end
 end
@@ -344,15 +344,19 @@ function ArgParse.add_arg_table!(settings::ArgParseSettings, cfg::Config)
 
                 # Special-casing specific properties
                 if :arg_type ∈ keys(props)
-                    arg_type_dict = Dict{String, DataType}("Any" => Any, "DateTime" => DateTime, "Time" => Time, "Date" => Date, "Bool" => Bool, "Int64" => Int64, "Float64" => Float64, "String" => String)
-                    @assert props[:arg_type] ∈ keys(arg_type_dict)
+                    arg_type_dict = Dict{String, DataType}("Any" => Any, "DateTime" => DateTime, "Time" => Time, "Date" => Date, "Bool" => Bool, "Int" => Int, "Float64" => Float64, "String" => String)
+                    if props[:arg_type] ∉ keys(arg_type_dict)
+                        error("Invalid arg_type: $(repr(props[:arg_type])). Must be one of: $(join(sort(repr.(keys(arg_type_dict))), ", ")).")
+                    end
                     props[:arg_type] = arg_type_dict[props[:arg_type]]
                 end
 
                 if :nargs ∈ keys(props)
                     nargs_dict = Dict{String, Char}("A" => 'A', "?" => '?', "*" => '*', "+" => '+', "R" => 'R')
-                    @assert props[:nargs] isa Int || props[:nargs] ∈ keys(nargs_dict)
-                    if !(props[:nargs] isa Int)
+                    if !(props[:nargs] isa Int) && !(props[:nargs] ∈ keys(nargs_dict))
+                        error("Invalid nargs: $(repr(props[:nargs])). Must be a nonnegative integer, or one of: $(join(sort(repr.(keys(nargs_dict))), ", ")).")
+                    end
+                    if props[:nargs] ∈ keys(nargs_dict)
                         props[:nargs] = nargs_dict[props[:nargs]]
                     end
                 end

@@ -2,6 +2,12 @@ using TOMLConfig
 using Dates
 using Test
 
+struct NoException <: Exception end
+
+macro test_nothrow(ex)
+    esc(:(@test_throws NoException ($(ex); throw(NoException()))))
+end
+
 function check_keys(toml::Dict{String}, has, doesnt)
     for key in has
         @test haskey(toml, key)
@@ -175,18 +181,69 @@ end
 @testset "customizing arg table" begin
     template = TOML.parse(
     """
+    a = [0]
+    b = 0.0
+    c = "c"
+    [sec1]
+        _INHERIT_ = "_PARENT_"
+        a = [1]
+        [sec1.sub1]
+            _INHERIT_ = "_PARENT_"
+            c = "d"
+        [sec1.sub2]
+            _INHERIT_ = "_PARENT_"
+            b = "_PARENT_"
+            c = "d"
+    """)
+
+    function randomly_insert_arg_dicts!(toml)
+        for node in TOMLConfig.StatelessBFS(Config(toml))
+            leaf = TOMLConfig.get_leaf(node)
+            for (k,v) in leaf
+                k == TOMLConfig.inherit_all_key() && continue # can't replace _INHERIT_ with arg dict
+                !TOMLConfig.is_arg(v) && continue # only replace args, not child dicts
+                rand() > 0.5 && continue # flip coin
+                leaf[k] = !TOMLConfig.is_arg_dict(v) ?
+                    Dict{String, Any}(TOMLConfig.arg_key() => TOMLConfig.arg_value(v)) :
+                    TOMLConfig.arg_value(v)
+            end
+        end
+        return toml
+    end
+
+    @testset "arg dict equivalence" begin
+        for args_list in [
+            String[],
+            ["--a", "1", "2", "--c", "cat"],
+            ["--b", "2.0", "--sec1.b", "3.0", "--sec1.sub1.a", "5"],
+        ]
+            template′ = randomly_insert_arg_dicts!(deepcopy(template))
+            parsed_args = parse_args(args_list, Config(deepcopy(template)); as_dict = true)
+            parsed_args′ = parse_args(args_list, Config(deepcopy(template′)); as_dict = true)
+            typed_isequal(parsed_args, parsed_args′)
+        end
+    end
+
+    template = TOML.parse(
+    """
     [a]
         _ARG_ = "_REQUIRED_"
         nargs = 2
-        arg_type = "Float64"
+        arg_type = "Int"
         required = true
         help = "help string"
     [b]
         _ARG_ = [1.0, 2.0]
+        nargs = "+"
         help = "help string"
-    [sub]
-        b = "_PARENT_"
     """)
-    args_list = ["--a", "1", "2"]
-    parsed_args = parse_args(args_list, Config(deepcopy(template)))
+    @testset "arg dict properties" begin
+        debug_parse_args = (args_list) -> parse_args(args_list, ArgParseSettings(exc_handler = ArgParse.debug_handler), Config(deepcopy(template)))
+        @test_throws ArgParseError debug_parse_args(String[]) # --a is required
+        @test_throws ArgParseError debug_parse_args(["--a", "3.0", "4.0"]) # --a must be Int
+        @test_throws ArgParseError debug_parse_args(["--a", "3"]) # --a requires two args
+        @test_throws ArgParseError debug_parse_args(["--a", "1", "2", "--b"]) # --b requires at least one arg
+        @test_nothrow debug_parse_args(["--a", "1", "2", "--b", "5.0"])
+        @test_nothrow debug_parse_args(["--a", "1", "2", "--b", "5", "10"]) # --b should allow conversion Int -> Float64
+    end
 end
