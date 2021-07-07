@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Home · TOMLConfig.jl</title><script data-outdated-warner src="assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.039/juliamono-regular.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.13.11/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="assets/documenter.js"></script><script src="siteinfo.js"></script><script src="../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href>TOMLConfig.jl</a></span></div><form class="docs-search" action="search/"><input class="docs-search-query" id="documenter-search-query" name="q" type="text" placeholder="Search docs"/></form><ul class="docs-menu"><li class="is-active"><a class="tocitem" href>Home</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Home</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Home</a></li></ul></nav><div class="docs-right"><a class="docs-edit-link" href="https://github.com/jondeuce/TOMLConfig.jl/blob/master/docs/src/index.md" title="Edit on GitHub"><span class="docs-icon fab"></span><span class="docs-label is-hidden-touch">Edit on GitHub</span></a><a class="docs-settings-button fas fa-cog" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-sidebar-button fa fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a></div></header><article class="content" id="documenter-page"><h1 id="TOMLConfig.jl"><a class="docs-heading-anchor" href="#TOMLConfig.jl">TOMLConfig.jl</a><a id="TOMLConfig.jl-1"></a><a class="docs-heading-anchor-permalink" href="#TOMLConfig.jl" title="Permalink"></a></h1><ul><li><a href="#TOMLConfig"><code>TOMLConfig</code></a></li><li><a href="#TOMLConfig.Config"><code>TOMLConfig.Config</code></a></li><li><a href="#ArgParse.add_arg_table!"><code>ArgParse.add_arg_table!</code></a></li><li><a href="#ArgParse.parse_args"><code>ArgParse.parse_args</code></a></li><li><a href="#TOMLConfig.arg_table_flag"><code>TOMLConfig.arg_table_flag</code></a></li><li><a href="#TOMLConfig.defaults!"><code>TOMLConfig.defaults!</code></a></li><li><a href="#TOMLConfig.parser_settings!"><code>TOMLConfig.parser_settings!</code></a></li></ul><article class="docstring"><header><a class="docstring-binding" id="TOMLConfig" href="#TOMLConfig"><code>TOMLConfig</code></a> — <span class="docstring-category">Module</span></header><section><div><pre><code class="language-julia">TOMLConfig</code></pre><p>Use TOML files to configure command line parsing via <a href="https://github.com/carlobaldassi/ArgParse.jl">ArgParse.jl</a>.</p></div><a class="docs-sourcelink" target="_blank" href="https://github.com/jondeuce/TOMLConfig.jl/blob/a87a6729170f3df8d192fc269a44d07561f975bd/src/TOMLConfig.jl#L1-L5">source</a></section></article><article class="docstring"><header><a class="docstring-binding" id="ArgParse.parse_args" href="#ArgParse.parse_args"><code>ArgParse.parse_args</code></a> — <span class="docstring-category">Function</span></header><section><div><pre><code class="language-julia">ArgParse.parse_args(
+    [args_list::Vector, [settings::ArgParseSettings,]] cfg::Config;
+    as_dict = false,
+    as_symbols = false,
+    kwargs...
+)</code></pre><p>Parse TOML configuration struct with command line arguments <code>args_list</code>.</p><p><strong>Arguments:</strong></p><ul><li><code>args_list::Vector</code>: vector of arguments to be parsed</li><li><code>settings::ArgParseSettings</code>: settings struct which will be configured according to <code>cfg</code></li><li><code>cfg::Config</code>: TOML configuration settings</li></ul><p><strong>Keywords:</strong></p><ul><li><code>as_dict</code>: if true, return config as a dictionary with <code>String</code> keys, otherwise return a <code>Config</code> struct</li><li><code>as_symbols</code>: if true and <code>as_dict=true</code>, return config dictionary with <code>Symbol</code> keys</li><li><code>kwargs...</code>: additional keyword arguments can be passed to customize the global parser settings; see <code>TOMLConfig.parser_settings!</code>. Note that these settings remain persistent on subsequent calls to <code>parse_args</code>; use <code>TOMLConfig.parser_settings!()</code> to restore all defaults.</li></ul><p><strong>Examples</strong></p><pre><code class="language-julia-repl">julia&gt; using TOMLConfig
+
+julia&gt; cfg = Config(TOML.parse(
+       &quot;&quot;&quot;
+       a = 1
+       b = 2
+       
+       [sec1]
+       b = &quot;_PARENT_&quot;
+       c = 3
+       
+           [sec1.sub1]
+           _INHERIT_ = &quot;_PARENT_&quot;
+       &quot;&quot;&quot;));
+
+julia&gt; parsed_args = parse_args([&quot;--a&quot;, &quot;3&quot;, &quot;--sec1.b&quot;, &quot;5&quot;, &quot;--sec1.c&quot;, &quot;10&quot;], cfg)
+TOML Config with contents:
+
+b = 2
+a = 3
+
+[sec1]
+c = 10
+b = 5
+
+    [sec1.sub1]
+    c = 10
+    b = 5</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/jondeuce/TOMLConfig.jl/blob/a87a6729170f3df8d192fc269a44d07561f975bd/src/TOMLConfig.jl#L399-L451">source</a></section></article><article class="docstring"><header><a class="docstring-binding" id="ArgParse.add_arg_table!" href="#ArgParse.add_arg_table!"><code>ArgParse.add_arg_table!</code></a> — <span class="docstring-category">Function</span></header><section><div><pre><code class="language-julia">ArgParse.add_arg_table!(settings::ArgParseSettings, cfg::Config)</code></pre><p>Populate <code>settings</code> argument table using configuration <code>cfg</code>.</p><p><strong>Examples</strong></p><pre><code class="language-julia-repl">julia&gt; using TOMLConfig
+
+julia&gt; cfg = Config(TOML.parse(
+       &quot;&quot;&quot;
+       a = 1.0
+       b = 2
+       
+       [sec1]
+       c = [3, 4]
+       
+           [sec1.sub1]
+           d = &quot;d&quot;
+       &quot;&quot;&quot;));
+
+julia&gt; settings = add_arg_table!(ArgParseSettings(prog = &quot;myscript.jl&quot;), cfg);
+
+julia&gt; ArgParse.show_help(settings; exit_when_done = false)
+usage: myscript.jl [--b B] [--a A] [--sec1.c [SEC1.C...]]
+                   [--sec1.sub1.d SEC1.SUB1.D]
+
+optional arguments:
+  --b B                 (type: Int64, default: 2)
+  --a A                 (type: Float64, default: 1.0)
+  --sec1.c [SEC1.C...]  (type: Int64, default: [3, 4])
+  --sec1.sub1.d SEC1.SUB1.D
+                        (default: &quot;d&quot;)</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/jondeuce/TOMLConfig.jl/blob/a87a6729170f3df8d192fc269a44d07561f975bd/src/TOMLConfig.jl#L300-L335">source</a></section></article><article class="docstring"><header><a class="docstring-binding" id="TOMLConfig.parser_settings!" href="#TOMLConfig.parser_settings!"><code>TOMLConfig.parser_settings!</code></a> — <span class="docstring-category">Function</span></header><section><div><pre><code class="language-julia">parser_settings!(;
+    arg_key = &quot;_ARG_&quot;,
+    arg_required_value = &quot;_REQUIRED_&quot;,
+    flag_delim = &quot;.&quot;,
+    inherit_all_key = &quot;_INHERIT_&quot;,
+    inherit_parent_value = &quot;_PARENT_&quot;,
+)</code></pre><p>Customize global settings for parsing <code>Config</code> structs. To restore default settings, use <code>TOMLConfig.parser_settings!()</code>.</p><p><strong>Keywords:</strong></p><ul><li><code>arg_key</code>: if this key is found in a TOML section, the rest of the section is interpreted as properties for the argument table entry</li><li><code>arg_required_value</code>: if this value is found in a TOML section, the <code>required = true</code> is passed to the argument table entry</li><li><code>inherit_all_key</code>: if this key is found in a TOML section, all fields from the immediate parent section (i.e., non-recursive) should be inherited</li><li><code>inherit_parent_value</code>: if this value is found in a TOML section, it is replaced with the value corresponding to the same key in the immediate parent section (i.e., non-recursive)</li><li><code>flag_delim</code>: command line flags for keys in nested TOML sections are formed by joining all parent keys together with this delimiter</li></ul></div><a class="docs-sourcelink" target="_blank" href="https://github.com/jondeuce/TOMLConfig.jl/blob/a87a6729170f3df8d192fc269a44d07561f975bd/src/TOMLConfig.jl#L144-L162">source</a></section></article><article class="docstring"><header><a class="docstring-binding" id="TOMLConfig.Config" href="#TOMLConfig.Config"><code>TOMLConfig.Config</code></a> — <span class="docstring-category">Type</span></header><section><div><pre><code class="language-julia">Config(toml::AbstractDict{String})
+Config(; filename::String)</code></pre><p>Basic tree structure for navigating TOML file contents. Each node in the <code>Config</code> tree represents a single section of a TOML file. Children of a <code>Config</code> node are the corresponding TOML subsections, if they exist.</p><p><strong>Examples</strong></p><pre><code class="language-julia-repl">julia&gt; using TOMLConfig
+
+julia&gt; cfg = Config(TOML.parse(
+       &quot;&quot;&quot;
+       a = 1
+       
+       [sec1]
+           b = 2
+       
+           [sec1.sub1]
+           c = 3
+       &quot;&quot;&quot;))
+TOML Config with contents:
+
+a = 1
+
+[sec1]
+b = 2
+
+    [sec1.sub1]
+    c = 3
+
+julia&gt; cfg.sec1
+TOML Config with contents:
+
+b = 2
+
+[sub1]
+c = 3
+
+julia&gt; cfg.sec1.sub1
+TOML Config with contents:
+
+c = 3</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/jondeuce/TOMLConfig.jl/blob/a87a6729170f3df8d192fc269a44d07561f975bd/src/TOMLConfig.jl#L21-L67">source</a></section></article><article class="docstring"><header><a class="docstring-binding" id="TOMLConfig.defaults!" href="#TOMLConfig.defaults!"><code>TOMLConfig.defaults!</code></a> — <span class="docstring-category">Function</span></header><section><div><pre><code class="language-julia">defaults!(cfg::Config)</code></pre><p>Populate fields of TOML config which are specified to have default values inherited from parent sections.</p><p><strong>Examples</strong></p><pre><code class="language-julia-repl">julia&gt; using TOMLConfig
+
+julia&gt; cfg = TOMLConfig.defaults!(Config(TOML.parse(
+       &quot;&quot;&quot;
+       a = 1
+       b = 2
+       
+       [sec1]
+       b = &quot;_PARENT_&quot;
+       c = 3
+       
+           [sec1.sub1]
+           _INHERIT_ = &quot;_PARENT_&quot;
+       &quot;&quot;&quot;)))
+TOML Config with contents:
+
+b = 2
+a = 1
+
+[sec1]
+c = 3
+b = 2
+
+    [sec1.sub1]
+    c = 3
+    b = 2</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/jondeuce/TOMLConfig.jl/blob/a87a6729170f3df8d192fc269a44d07561f975bd/src/TOMLConfig.jl#L173-L208">source</a></section></article><article class="docstring"><header><a class="docstring-binding" id="TOMLConfig.arg_table_flag" href="#TOMLConfig.arg_table_flag"><code>TOMLConfig.arg_table_flag</code></a> — <span class="docstring-category">Function</span></header><section><div><pre><code class="language-julia">arg_table_flag(node::Config, k::String)</code></pre><p>Generate command flag corresponding to nested key <code>k</code> in a <code>Config</code> node. The flag is constructed by joining the keys recursively from the parents of the current node using the delimiter <code>flag_delim()</code> and prepending &quot;–&quot;.</p><p><strong>Examples</strong></p><p>Given a <code>Config</code> node with contents</p><pre><code class="language-julia">a = 1
+b = 2
+
+[sec1]
+c = 3
+
+    [sec1.sub1]
+    d = 4</code></pre><p>The corresponding flags that will be generated are</p><pre><code class="language-julia">--a
+--b
+--sec1.c
+--sec1.sub1.d</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/jondeuce/TOMLConfig.jl/blob/a87a6729170f3df8d192fc269a44d07561f975bd/src/TOMLConfig.jl#L258-L286">source</a></section></article></article><nav class="docs-footer"><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 0.27.3 on <span class="colophon-date" title="Wednesday 7 July 2021 00:43">Wednesday 7 July 2021</span>. Using Julia version 1.6.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
