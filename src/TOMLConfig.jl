@@ -122,6 +122,8 @@ function Base.show(io::IO, ::MIME"text/plain", cfg::Config)
     TOML.print(io, get_leaf(cfg))
 end
 
+default_args_list() = ARGS
+default_argparse_settings() = ArgParseSettings()
 default_parser_settings() = Dict{String, String}(
     "arg_key"              => "_ARG_",
     "arg_required_value"   => "_REQUIRED_",
@@ -398,7 +400,9 @@ end
 
 """
     ArgParse.parse_args(
-        [args_list::Vector, [settings::ArgParseSettings,]] cfg::Config;
+        [args_list::Vector = ARGS,]
+        [settings::ArgParseSettings = ArgParseSettings(),]
+        cfg::Config;
         as_dict = false,
         as_symbols = false,
         kwargs...
@@ -407,8 +411,8 @@ end
 Parse TOML configuration struct with command line arguments `args_list`.
 
 # Arguments:
-* `args_list::Vector`: vector of arguments to be parsed
-* `settings::ArgParseSettings`: settings struct which will be configured according to `cfg`
+* `args_list::Vector`: (optional) vector of arguments to be parsed
+* `settings::ArgParseSettings`: (optional) settings struct which will be configured according to `cfg`
 * `cfg::Config`: TOML configuration settings
 
 # Keywords:
@@ -452,8 +456,6 @@ b = 5
 function ArgParse.parse_args(args_list::Vector, settings::ArgParseSettings, cfg::Config; kwargs...)
     parse_args!(args_list, deepcopy(settings), deepcopy(cfg); kwargs...)
 end
-default_args_list() = ARGS
-default_argparse_settings() = ArgParseSettings()
 ArgParse.parse_args(cfg::Config; kwargs...) = parse_args(default_argparse_settings(), cfg; kwargs...)
 ArgParse.parse_args(settings::ArgParseSettings, cfg::Config; kwargs...) = parse_args(default_args_list(), settings, cfg; kwargs...)
 ArgParse.parse_args(args_list::Vector, cfg::Config; kwargs...) = parse_args(args_list, default_argparse_settings(), cfg; kwargs...)
