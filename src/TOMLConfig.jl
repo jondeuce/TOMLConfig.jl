@@ -1,3 +1,8 @@
+"""
+    TOMLConfig
+
+Use TOML files to configure command line parsing via [ArgParse.jl](https://github.com/carlobaldassi/ArgParse.jl).
+"""
 module TOMLConfig
 
 using AbstractTrees, Dates
@@ -14,26 +19,28 @@ end
 @nospecialize # use only declared type signatures, helps with compile time
 
 """
-    Config(tree::AbstractDict{String})
+    Config(toml::AbstractDict{String})
     Config(; filename::String)
 
 Basic tree structure for navigating TOML file contents.
-Each `Config` leaf node represents a single section of a TOML file.
+Each node in the `Config` tree represents a single section of a TOML file.
 Children of a `Config` node are the corresponding TOML subsections, if they exist.
 
 # Examples
 
 ```jldoctest
+julia> using TOMLConfig
+
 julia> cfg = Config(TOML.parse(
-    \"\"\"
-    a = 1
-
-    [sec1]
-        b = 2
-
-        [sec1.sub1]
-        c = 3
-    \"\"\"))
+       \"\"\"
+       a = 1
+       
+       [sec1]
+           b = 2
+       
+           [sec1.sub1]
+           c = 3
+       \"\"\"))
 TOML Config with contents:
 
 a = 1
@@ -68,7 +75,7 @@ struct Config
     "Key within the parent node which points to this node, or `nothing` for the root node"
     key::Union{String, Nothing}
 end
-Config(tree::AbstractDict{String}) = Config(tree, nothing, nothing)
+Config(toml::AbstractDict{String}) = Config(toml, nothing, nothing)
 Config(; filename::String) = Config(TOML.parsefile(filename))
 
 # Define getters to access struct fields, since `getproperty` is overloaded for convenience below
@@ -125,12 +132,14 @@ default_parser_settings() = Dict{String, String}(
 
 const _parser_settings = default_parser_settings()
 parser_settings()      = _parser_settings
+parser_settings(k)     = _parser_settings[string(k)]
+parser_settings!(k, v) = _parser_settings[string(k)] = string(v)
 
-arg_key()              = parser_settings()["arg_key"]
-arg_required_value()   = parser_settings()["arg_required_value"]
-flag_delim()           = parser_settings()["flag_delim"]
-inherit_all_key()      = parser_settings()["inherit_all_key"]
-inherit_parent_value() = parser_settings()["inherit_parent_value"]
+arg_key()              = parser_settings("arg_key")
+arg_required_value()   = parser_settings("arg_required_value")
+flag_delim()           = parser_settings("flag_delim")
+inherit_all_key()      = parser_settings("inherit_all_key")
+inherit_parent_value() = parser_settings("inherit_parent_value")
 
 """
     parser_settings!(;
@@ -154,7 +163,7 @@ To restore default settings, use `TOMLConfig.parser_settings!()`.
 function parser_settings!(; kwargs...)
     for (k,v) in merge!(default_parser_settings(), recurse_convert_keyvaltype(kwargs, String, String))
         if k ∈ keys(parser_settings())
-            parser_settings()[k] = string(v)
+            parser_settings!(k, v)
         else
             error("Invalid parser setting: $(k). Possible settings are: $(join(sort(collect(keys(default_parser_settings()))), ", ")).")
         end
@@ -169,18 +178,20 @@ Populate fields of TOML config which are specified to have default values inheri
 # Examples
 
 ```jldoctest
+julia> using TOMLConfig
+
 julia> cfg = TOMLConfig.defaults!(Config(TOML.parse(
-    \"\"\"
-    a = 1
-    b = 2
-
-    [sec1]
-    b = \"$(inherit_parent_value())\"
-    c = 3
-
-        [sec1.sub1]
-        $(inherit_all_key()) = \"$(inherit_parent_value())\"
-    \"\"\")))
+       \"\"\"
+       a = 1
+       b = 2
+       
+       [sec1]
+       b = \"$(inherit_parent_value())\"
+       c = 3
+       
+           [sec1.sub1]
+           $(inherit_all_key()) = \"$(inherit_parent_value())\"
+       \"\"\")))
 TOML Config with contents:
 
 b = 2
@@ -212,7 +223,7 @@ function defaults!(cfg::Config; replace_arg_dicts = false)
     # Step 1:
     #   Inverted breadth-first search for "_INHERIT_" keys with value "_PARENT_".
     #   If found, copy all key-value pairs from the immediate parent (i.e. non-recursive) into the node containing "_INHERIT_".
-    #   Delete the "_INHERIT_" afterwards.
+    #   Delete the "_INHERIT_" key afterwards.
     for node in reverse(collect(StatelessBFS(cfg)))
         parent, leaf = get_parent(node), get_leaf(node)
         if parent !== nothing && haskey(leaf, inherit_all_key()) && leaf[inherit_all_key()] == inherit_parent_value()
@@ -254,7 +265,7 @@ of the current node using the delimiter `flag_delim()` and prepending "--".
 # Examples
 
 Given a `Config` node with contents
-```jldoctest
+```julia
 a = 1
 b = 2
 
@@ -266,7 +277,7 @@ c = 3
 ```
 
 The corresponding flags that will be generated are
-```jldoctest
+```julia
 --a
 --b
 --sec1$(flag_delim())c
@@ -294,23 +305,25 @@ Populate `settings` argument table using configuration `cfg`.
 # Examples
 
 ```jldoctest
+julia> using TOMLConfig
+
 julia> cfg = Config(TOML.parse(
-    \"\"\"
-    a = 1.0
-    b = 2
+       \"\"\"
+       a = 1.0
+       b = 2
+       
+       [sec1]
+       c = [3, 4]
+       
+           [sec1.sub1]
+           d = "d"
+       \"\"\"));
 
-    [sec1]
-    c = [3, 4]
-
-        [sec1.sub1]
-        d = "d"
-    \"\"\"));
-
-julia> settings = add_arg_table!(ArgParseSettings(), cfg);
+julia> settings = add_arg_table!(ArgParseSettings(prog = "myscript.jl"), cfg);
 
 julia> ArgParse.show_help(settings; exit_when_done = false)
-usage: <PROGRAM> [--b B] [--a A] [--sec1.c [SEC1.C...]]
-                 [--sec1.sub1.d SEC1.SUB1.D]
+usage: myscript.jl [--b B] [--a A] [--sec1.c [SEC1.C...]]
+                   [--sec1.sub1.d SEC1.SUB1.D]
 
 optional arguments:
   --b B                 (type: Int64, default: 2)
@@ -406,20 +419,22 @@ Parse TOML configuration struct with command line arguments `args_list`.
 # Examples
 
 ```jldoctest
+julia> using TOMLConfig
+
 julia> cfg = Config(TOML.parse(
-    \"\"\"
-    a = 1
-    b = 2
+       \"\"\"
+       a = 1
+       b = 2
+       
+       [sec1]
+       b = \"$(inherit_parent_value())\"
+       c = 3
+       
+           [sec1.sub1]
+           $(inherit_all_key()) = \"$(inherit_parent_value())\"
+       \"\"\"));
 
-    [sec1]
-    b = \"$(inherit_parent_value())\"
-    c = 3
-
-        [sec1.sub1]
-        $(inherit_all_key()) = \"$(inherit_parent_value())\"
-    \"\"\"));
-
-julia> parsed_args = parse_args(cfg, ["--a", "3", "--sec1.b", "5", "--sec1.c", "10"]);
+julia> parsed_args = parse_args(["--a", "3", "--sec1.b", "5", "--sec1.c", "10"], cfg)
 TOML Config with contents:
 
 b = 2
