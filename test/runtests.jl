@@ -1,6 +1,6 @@
-using TOMLConfig
-using Dates
 using Test
+using TOMLConfig
+using Dates, Random
 
 struct NoException <: Exception end
 
@@ -197,13 +197,13 @@ end
     """)
 
     function randomly_insert_arg_dicts!(toml)
+        seed = 0
         for node in TOMLConfig.StatelessBFS(Config(toml))
-            leaf = TOMLConfig.get_leaf(node)
-            for (k,v) in leaf
+            for (k,v) in TOMLConfig.contents(node)
                 k == TOMLConfig.inherit_all_key() && continue # can't replace _INHERIT_ with arg dict
                 !TOMLConfig.is_arg(v) && continue # only replace args, not child dicts
-                rand() > 0.5 && continue # flip coin
-                leaf[k] = !TOMLConfig.is_arg_dict(v) ?
+                rand(MersenneTwister(seed += 1)) > 0.5 && continue # flip coin
+                TOMLConfig.contents(node)[k] = !TOMLConfig.is_dict_arg(v) ?
                     Dict{String, Any}(TOMLConfig.arg_key() => TOMLConfig.arg_value(v)) :
                     TOMLConfig.arg_value(v)
             end
