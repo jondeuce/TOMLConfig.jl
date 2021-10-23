@@ -8,7 +8,7 @@ module TOMLConfig
 using AbstractTrees, Dates, Reexport
 @reexport using ArgParse, TOML
 
-export Config
+export Config, parse_config
 
 if isdefined(Base, :Experimental) && isdefined(Base.Experimental, Symbol("@compiler_options"))
     @eval Base.Experimental.@compiler_options compile=min optimize=0 infer=false
@@ -73,8 +73,27 @@ struct Config
     "Key within the parent node which points to this node, or `nothing` for the root node"
     key::Union{String, Nothing}
 end
-Config(toml::AbstractDict{String}) = Config(toml, nothing, nothing)
+Config(toml::AbstractDict{String}) = Config(convert(Dict{String, Any}, toml), nothing, nothing)
 Config(; filename::String) = Config(TOML.parsefile(filename))
+
+"""
+    parse_config(toml::AbstractDict{String})
+    parse_config(; filename::String)
+
+Convenience method for parsing configuration files. Equivalent to `ArgParse.parse_args(Config(toml))`
+and `ArgParse.parse_args(Config(; filename = filename))`, respectively.
+"""
+parse_config(toml::AbstractDict{String}) = ArgParse.parse_args(Config(toml))
+parse_config(; filename::String) = ArgParse.parse_args(Config(; filename = filename))
+
+"""
+    to_dict([::Type{D} = Dict{String, Any},] cfg::Config)
+
+Convert `cfg` to a dictionary with type `D`.
+"""
+to_dict(cfg::Config) = convert(Dict{String, Any}, cfg)
+to_dict(::Type{D}, cfg::Config) where {D <: AbstractDict} = convert(D, cfg)
+Base.convert(::Type{D}, cfg::Config) where {D <: AbstractDict} = convert(D, deepcopy(contents(cfg)))
 
 # Define getters to access struct fields, since `getproperty` is overloaded for convenience below
 contents(cfg::Config) = getfield(cfg, :contents)
