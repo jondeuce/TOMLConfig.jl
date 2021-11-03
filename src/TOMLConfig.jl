@@ -8,7 +8,7 @@ module TOMLConfig
 using AbstractTrees, Dates, Reexport
 @reexport using ArgParse, TOML
 
-export Config, parse_config
+export Config
 
 if isdefined(Base, :Experimental) && isdefined(Base.Experimental, Symbol("@compiler_options"))
     @eval Base.Experimental.@compiler_options compile=min optimize=0 infer=false
@@ -85,6 +85,19 @@ and `ArgParse.parse_args(Config(; filename = filename))`, respectively.
 """
 parse_config(toml::AbstractDict{String}) = ArgParse.parse_args(Config(toml))
 parse_config(; filename::String) = ArgParse.parse_args(Config(; filename = filename))
+
+"""
+    save_config(cfg::Union{Config, AbstractDict}; filename::AbstractString, kwargs...)
+
+Save configuration `cfg` to TOML file `filename`.
+Additional keyword arguments are forwarded to `TOML.print`.
+"""
+function save_config(cfg::AbstractDict; filename::AbstractString, kwargs...)
+    open(filename; write = true) do io
+        TOML.print(io, cfg; kwargs...)
+    end
+end
+save_config(cfg::Config; kwargs...) = save_config(to_dict(cfg); kwargs...)
 
 """
     to_dict([::Type{D} = Dict{String, Any},] cfg::Config)
