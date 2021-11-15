@@ -5,7 +5,10 @@ Use TOML files to configure command line parsing via [ArgParse.jl](https://githu
 """
 module TOMLConfig
 
-using AbstractTrees, Dates, Reexport
+using AbstractTrees
+using Dates
+using Reexport
+
 @reexport using ArgParse, TOML
 
 export Config
@@ -63,7 +66,7 @@ TOML Config with contents:
 c = 3
 ```
 """
-struct Config
+struct Config <: AbstractDict{String, Any}
     "TOML section contents"
     contents::AbstractDict{String, Any}
 
@@ -75,6 +78,64 @@ struct Config
 end
 Config(toml::AbstractDict{String}) = Config(convert(Dict{String, Any}, toml), nothing, nothing)
 Config(; filename::String) = Config(TOML.parsefile(filename))
+
+# Forward `AbstractDict`s methods to `Config.contents`
+for f in [:(Base.get), :(Base.get!), :(Base.getkey), :(Base.haskey), :(Base.iterate), :(Base.keys), :(Base.length), :(Base.pop!), :(Base.values)]
+    @eval $f(cfg::Config, args...; kwargs...) = $f(contents(cfg), args...; kwargs...)
+end
+for f in [:(Base.delete!), :(Base.pairs), :(Base.sizehint!)]
+    @eval $f(cfg::Config, args...; kwargs...) = Config($f(contents(cfg), args...; kwargs...))
+end
+for f in [:(Base.merge), :(Base.merge!)]
+    @eval $f(cfg::Config, others::Config...; kwargs...) = Config($f(contents(cfg), map(contents, others)...; kwargs...))
+end
+
+# Define getters to access struct fields, since `getproperty` is overloaded for convenience below
+contents(cfg::Config) = getfield(cfg, :contents)
+parent(cfg::Config) = getfield(cfg, :parent)
+key(cfg::Config) = getfield(cfg, :key)
+
+function Base.getproperty(cfg::Config, k::Symbol)
+    v = contents(cfg)[String(k)]
+    if v isa AbstractDict
+        v = Config(v, cfg, String(k))
+    end
+    return v
+end
+
+Base.setproperty!(cfg::Config, k::Symbol, v) = contents(cfg)[String(k)] = v
+
+AbstractTrees.nodetype(::Config) = Config
+AbstractTrees.children(parent::Config) = [Config(contents, parent, key) for (key, contents) in contents(parent) if is_child(contents)]
+
+function AbstractTrees.printnode(io::IO, cfg::Config)
+    if key(cfg) !== nothing
+        println(io, key(cfg) * ":")
+    end
+    print(io, join(["$k = $v" for (k,v) in contents(cfg) if !(v isa AbstractDict)], "\n"))
+end
+
+function Base.show(io::IO, ::MIME"text/plain", cfg::Config)
+    println(io, "TOML Config with contents:\n")
+    TOML.print(io, contents(cfg))
+end
+
+# Convenience functions for classifying nodes
+is_child(v) = !is_arg(v)
+is_arg(v) = is_plain_arg(v) || is_dict_arg(v)
+is_plain_arg(v) = !(v isa AbstractDict)
+is_dict_arg(v) = v isa AbstractDict && arg_key() ∈ keys(v)
+arg_props(v::AbstractDict{String}) = recurse_convert_keytype(delete!(deepcopy(v), arg_key()), Symbol)
+arg_value(v) = is_dict_arg(v) ? deepcopy(v[arg_key()]) : deepcopy(v)
+arg_value(d::AbstractDict{String}, k::String) = arg_value(d[k])
+arg_value!(d::AbstractDict{String}, v, k::String) = is_dict_arg(d[k]) ? (d[k][arg_key()] = deepcopy(v)) : (d[k] = deepcopy(v))
+
+# Convenience functions for getting/setting deeply nested nodes
+recurse_getindex(d::AbstractDict, keys) = foldl((dᵢ,k) -> dᵢ[k], keys; init = d)
+recurse_setindex!(d::AbstractDict, v, keys) = recurse_getindex(d, keys[begin:end-1])[keys[end]] = v
+recurse_convert_keytype(d::AbstractDict, ::Type{K} = Symbol) where {K} = Dict{K, Any}(K(k) => v isa AbstractDict ? recurse_convert_keytype(v, K) : v for (k,v) in d)
+recurse_convert_valtype(d::AbstractDict, ::Type{V} = Symbol) where {V} = Dict{keytype(d), Any}(k => v isa AbstractDict ? recurse_convert_valtype(v, V) : V(v) for (k,v) in d)
+recurse_convert_keyvaltype(d::AbstractDict, ::Type{K} = Symbol, ::Type{V} = Symbol) where {K, V} = Dict{K, Any}(K(k) => v isa AbstractDict ? recurse_convert_keyvaltype(v, K, V) : V(v) for (k,v) in d)
 
 """
     parse_config(toml::AbstractDict{String})
@@ -97,62 +158,9 @@ function save_config(cfg::AbstractDict; filename::AbstractString, kwargs...)
         TOML.print(io, cfg; kwargs...)
     end
 end
-save_config(cfg::Config; kwargs...) = save_config(to_dict(cfg); kwargs...)
+save_config(cfg::Config; kwargs...) = save_config(deepcopy(Dict(cfg)); kwargs...)
 
-"""
-    to_dict([::Type{D} = Dict{String, Any},] cfg::Config)
-
-Convert `cfg` to a dictionary with type `D`.
-"""
-to_dict(cfg::Config) = convert(Dict{String, Any}, cfg)
-to_dict(::Type{D}, cfg::Config) where {D <: AbstractDict} = convert(D, cfg)
-Base.convert(::Type{D}, cfg::Config) where {D <: AbstractDict} = convert(D, deepcopy(contents(cfg)))
-
-# Define getters to access struct fields, since `getproperty` is overloaded for convenience below
-contents(cfg::Config) = getfield(cfg, :contents)
-parent(cfg::Config) = getfield(cfg, :parent)
-key(cfg::Config) = getfield(cfg, :key)
-
-is_child(v) = !is_arg(v)
-is_arg(v) = is_plain_arg(v) || is_dict_arg(v)
-is_plain_arg(v) = !(v isa AbstractDict)
-is_dict_arg(v) = v isa AbstractDict && arg_key() ∈ keys(v)
-arg_props(v::AbstractDict{String}) = recurse_convert_keytype(delete!(deepcopy(v), arg_key()), Symbol)
-arg_value(v) = is_dict_arg(v) ? deepcopy(v[arg_key()]) : deepcopy(v)
-arg_value(d::AbstractDict{String}, k::String) = arg_value(d[k])
-arg_value!(d::AbstractDict{String}, v, k::String) = is_dict_arg(d[k]) ? (d[k][arg_key()] = deepcopy(v)) : (d[k] = deepcopy(v))
-
-recurse_getindex(d::AbstractDict, keys) = foldl((dᵢ,k) -> dᵢ[k], keys; init = d)
-recurse_setindex!(d::AbstractDict, v, keys) = recurse_getindex(d, keys[begin:end-1])[keys[end]] = v
-recurse_convert_keytype(d::AbstractDict, ::Type{K} = Symbol) where {K} = Dict{K, Any}(K(k) => v isa AbstractDict ? recurse_convert_keytype(v, K) : v for (k,v) in d)
-recurse_convert_valtype(d::AbstractDict, ::Type{V} = Symbol) where {V} = Dict{keytype(d), Any}(k => v isa AbstractDict ? recurse_convert_valtype(v, V) : V(v) for (k,v) in d)
-recurse_convert_keyvaltype(d::AbstractDict, ::Type{K} = Symbol, ::Type{V} = Symbol) where {K, V} = Dict{K, Any}(K(k) => v isa AbstractDict ? recurse_convert_keyvaltype(v, K, V) : V(v) for (k,v) in d)
-
-function Base.getproperty(cfg::Config, k::Symbol)
-    v = contents(cfg)[String(k)]
-    if v isa AbstractDict
-        Config(v, cfg, String(k))
-    else
-        v
-    end
-end
-Base.setproperty!(cfg::Config, k::Symbol, v) = contents(cfg)[String(k)] = v
-
-AbstractTrees.nodetype(::Config) = Config
-AbstractTrees.children(parent::Config) = [Config(contents, parent, key) for (key, contents) in contents(parent) if is_child(contents)]
-
-function AbstractTrees.printnode(io::IO, cfg::Config)
-    if key(cfg) !== nothing
-        println(io, key(cfg) * ":")
-    end
-    print(io, join(["$k = $v" for (k,v) in contents(cfg) if !(v isa AbstractDict)], "\n"))
-end
-
-function Base.show(io::IO, ::MIME"text/plain", cfg::Config)
-    println(io, "TOML Config with contents:\n")
-    TOML.print(io, contents(cfg))
-end
-
+# Parser settings
 default_args_list() = ARGS
 default_argparse_settings() = ArgParseSettings()
 default_parser_settings() = Dict{String, String}(
