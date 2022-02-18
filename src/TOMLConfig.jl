@@ -75,19 +75,25 @@ struct Config <: AbstractDict{String, Any}
 
     "Key within the parent node which points to this node, or `nothing` for the root node"
     key::Union{String, Nothing}
-end
-Config(toml::AbstractDict{String}) = Config(convert(Dict{String, Any}, toml), nothing, nothing)
-Config(; filename::String) = Config(TOML.parsefile(filename))
 
-# Forward `AbstractDict`s methods to `Config.contents`
-for f in [:(Base.get), :(Base.get!), :(Base.getkey), :(Base.haskey), :(Base.iterate), :(Base.keys), :(Base.length), :(Base.pop!), :(Base.values)]
-    @eval $f(cfg::Config, args...; kwargs...) = $f(contents(cfg), args...; kwargs...)
-end
-for f in [:(Base.delete!), :(Base.pairs), :(Base.sizehint!)]
-    @eval $f(cfg::Config, args...; kwargs...) = Config($f(contents(cfg), args...; kwargs...))
-end
-for f in [:(Base.merge), :(Base.merge!)]
-    @eval $f(cfg::Config, others::Config...; kwargs...) = Config($f(contents(cfg), map(contents, others)...; kwargs...))
+    function Config(
+            x::Union{NamedTuple, AbstractDict} = Dict{String, Any}(),
+            parent::Union{Config, Nothing} = nothing,
+            key::Union{String, Nothing} = nothing;
+            filename::Union{String, Nothing} = nothing
+        )
+        if filename !== nothing
+            return Config(TOML.parsefile(filename))
+        end
+
+        contents = Dict{String, Any}()
+        cfg = new(contents, parent, key)
+        for (k, v) in pairs(x)
+            contents[String(k)] = v isa Union{NamedTuple, AbstractDict} ? Config(v, cfg, String(k)) : v
+        end
+
+        return cfg
+    end
 end
 
 # Define getters to access struct fields, since `getproperty` is overloaded for convenience below
@@ -95,47 +101,82 @@ contents(cfg::Config) = getfield(cfg, :contents)
 parent(cfg::Config) = getfield(cfg, :parent)
 key(cfg::Config) = getfield(cfg, :key)
 
-function Base.getproperty(cfg::Config, k::Symbol)
-    v = contents(cfg)[String(k)]
-    if v isa AbstractDict
-        v = Config(v, cfg, String(k))
-    end
-    return v
+function Base.show(io::IO, ::MIME"text/plain", cfg::Config)
+    println(io, "TOML Config with contents:\n")
+    TOML.print(io, dict(cfg))
 end
 
-Base.setproperty!(cfg::Config, k::Symbol, v) = contents(cfg)[String(k)] = v
+dict(cfg::Config) = Dict{String, Any}(k => v isa Config ? dict(v) : v for (k, v) in cfg)
+
+assert_root(cfg::Config) = @assert parent(cfg) === nothing && key(cfg) === nothing
+
+# Forward `AbstractDict`s methods to `Config.contents`
+Base.getproperty(cfg::Config, k::String) = get!(cfg, k, Config(Dict{String, Any}(), cfg, k))
+Base.getproperty(cfg::Config, k::Symbol) = getproperty(cfg, String(k))
+Base.getproperty(cfg::Config, k) = getproperty(cfg, String(k))
+
+Base.setproperty!(cfg::Config, k::String, v) = contents(cfg)[k] = v
+Base.setproperty!(cfg::Config, k::Symbol, v) = setproperty!(cfg, String(k), v)
+Base.setproperty!(cfg::Config, k, v) = setproperty!(cfg, String(k), v)
+
+Base.propertynames(cfg::Config) = collect(keys(contents(cfg)))
+
+Base.getindex(cfg::Config, k) = getproperty(cfg, String(k))
+Base.setindex!(cfg::Config, v, k) = setproperty!(cfg, String(k), v)
+
+Base.iterate(cfg::Config, args...) = iterate(contents(cfg), args...)
+Base.keys(cfg::Config) = keys(contents(cfg))
+Base.values(cfg::Config) = values(contents(cfg))
+Base.length(cfg::Config) = length(contents(cfg))
+Base.isempty(cfg::Config) = isempty(contents(cfg))
+Base.pairs(cfg::Config) = pairs(contents(cfg))
+Base.empty!(cfg::Config) = (assert_root(cfg); empty!(contents(cfg)); cfg)
+Base.get(cfg::Config, k, default) = get(contents(cfg), String(k), default)
+Base.get!(cfg::Config, k, default) = get!(contents(cfg), String(k), default)
+
+Base.delete!(cfg::Config, k) = delete!(contents(cfg), String(k))
+
+Base.isequal(a::Config, b::Config) = contents(a) == contents(b) && parent(a) == parent(b) && key(a) == key(b)
+Base.copy(cfg::Config) = Config(copy(contents(cfg)), parent(cfg) === nothing ? nothing : copy(parent(cfg)), key(cfg))
+Base.deepcopy(cfg::Config) = Config(deepcopy(contents(cfg)), parent(cfg) === nothing ? nothing : deepcopy(parent(cfg)), key(cfg))
+
+Base.merge(a::Config, b::Config) = merge!(copy(a), b)
+
+function Base.merge!(a::Config, b::Config)
+    for (k, v) in pairs(b)
+        if haskey(a, k) && v isa Config
+            merge!(a[k], v)
+        else
+            a[k] = v
+        end
+    end
+    return a
+end
 
 AbstractTrees.nodetype(::Config) = Config
-AbstractTrees.children(parent::Config) = [Config(contents, parent, key) for (key, contents) in contents(parent) if is_child(contents)]
+AbstractTrees.children(parent::Config) = filter(is_child, collect(values(parent)))
 
 function AbstractTrees.printnode(io::IO, cfg::Config)
     if key(cfg) !== nothing
         println(io, key(cfg) * ":")
     end
-    print(io, join(["$k = $v" for (k,v) in contents(cfg) if !(v isa AbstractDict)], "\n"))
-end
-
-function Base.show(io::IO, ::MIME"text/plain", cfg::Config)
-    println(io, "TOML Config with contents:\n")
-    TOML.print(io, contents(cfg))
+    print(io, join(["$k = $v" for (k, v) in cfg if !(v isa Config)], "\n"))
 end
 
 # Convenience functions for classifying nodes
 is_child(v) = !is_arg(v)
 is_arg(v) = is_plain_arg(v) || is_dict_arg(v)
-is_plain_arg(v) = !(v isa AbstractDict)
-is_dict_arg(v) = v isa AbstractDict && arg_key() ∈ keys(v)
-arg_props(v::AbstractDict{String}) = recurse_convert_keytype(delete!(deepcopy(v), arg_key()), Symbol)
+is_plain_arg(v) = !(v isa Config)
+is_dict_arg(v) = (v isa Config) && arg_key() ∈ keys(v)
+arg_props(v::Config) = recurse_convert_keytype(delete!(deepcopy(dict(v)), arg_key()), Symbol)
 arg_value(v) = is_dict_arg(v) ? deepcopy(v[arg_key()]) : deepcopy(v)
-arg_value(d::AbstractDict{String}, k::String) = arg_value(d[k])
-arg_value!(d::AbstractDict{String}, v, k::String) = is_dict_arg(d[k]) ? (d[k][arg_key()] = deepcopy(v)) : (d[k] = deepcopy(v))
 
 # Convenience functions for getting/setting deeply nested nodes
-recurse_getindex(d::AbstractDict, keys) = foldl((dᵢ,k) -> dᵢ[k], keys; init = d)
-recurse_setindex!(d::AbstractDict, v, keys) = recurse_getindex(d, keys[begin:end-1])[keys[end]] = v
-recurse_convert_keytype(d::AbstractDict, ::Type{K} = Symbol) where {K} = Dict{K, Any}(K(k) => v isa AbstractDict ? recurse_convert_keytype(v, K) : v for (k,v) in d)
-recurse_convert_valtype(d::AbstractDict, ::Type{V} = Symbol) where {V} = Dict{keytype(d), Any}(k => v isa AbstractDict ? recurse_convert_valtype(v, V) : V(v) for (k,v) in d)
-recurse_convert_keyvaltype(d::AbstractDict, ::Type{K} = Symbol, ::Type{V} = Symbol) where {K, V} = Dict{K, Any}(K(k) => v isa AbstractDict ? recurse_convert_keyvaltype(v, K, V) : V(v) for (k,v) in d)
+recurse_getindex(cfg::Config, keys) = foldl((dᵢ,k) -> dᵢ[k], keys; init = cfg)
+recurse_setindex!(cfg::Config, v, keys) = recurse_getindex(cfg, keys[begin:end-1])[keys[end]] = v
+recurse_convert_keytype(d::AbstractDict, ::Type{K} = Symbol) where {K} = Dict{K, Any}(K(k) => v isa AbstractDict ? recurse_convert_keytype(v, K) : v for (k, v) in d)
+recurse_convert_valtype(d::AbstractDict, ::Type{V} = Symbol) where {V} = Dict{keytype(d), Any}(k => v isa AbstractDict ? recurse_convert_valtype(v, V) : V(v) for (k, v) in d)
+recurse_convert_keyvaltype(d::AbstractDict, ::Type{K} = Symbol, ::Type{V} = Symbol) where {K, V} = Dict{K, Any}(K(k) => v isa AbstractDict ? recurse_convert_keyvaltype(v, K, V) : V(v) for (k, v) in d)
 
 """
     parse_config(toml::AbstractDict{String})
@@ -158,7 +199,7 @@ function save_config(cfg::AbstractDict; filename::AbstractString, kwargs...)
         TOML.print(io, cfg; kwargs...)
     end
 end
-save_config(cfg::Config; kwargs...) = save_config(deepcopy(Dict(cfg)); kwargs...)
+save_config(cfg::Config; kwargs...) = save_config(deepcopy(dict(cfg)); kwargs...)
 
 # Parser settings
 default_args_list() = ARGS
@@ -202,7 +243,7 @@ To restore default settings, use `TOMLConfig.parser_settings!()`.
 * `flag_delim`: command line flags for keys in nested TOML sections are formed by joining all parent keys together with this delimiter
 """
 function parser_settings!(; kwargs...)
-    for (k,v) in merge!(default_parser_settings(), recurse_convert_keyvaltype(kwargs, String, String))
+    for (k, v) in merge!(default_parser_settings(), recurse_convert_keyvaltype(kwargs, String, String))
         if k ∈ keys(parser_settings())
             parser_settings!(k, v)
         else
@@ -255,9 +296,9 @@ function defaults!(cfg::Config; replace_arg_dicts = false)
     #   Breadth-first search to replace arg table dictionaries with default values, which may be "_PARENT_"
     if replace_arg_dicts
         for node in StatelessBFS(cfg)
-            for (k,v) in collect(contents(node))
+            for (k, v) in node
                 if is_dict_arg(v)
-                    contents(node)[k] = arg_value(v)
+                    node[k] = arg_value(v)
                 end
             end
         end
@@ -269,15 +310,15 @@ function defaults!(cfg::Config; replace_arg_dicts = false)
     #   Delete the "_INHERIT_" key afterwards.
     for node in reverse(collect(StatelessBFS(cfg)))
         parent(node) === nothing && continue
-        !haskey(contents(node), _INHERIT_) && continue
-        contents(node)[_INHERIT_] != _PARENT_ && continue
-        for (k,v) in collect(contents(parent(node)))
-            if is_arg(v) && !haskey(contents(node), k)
+        !haskey(node, _INHERIT_) && continue
+        node[_INHERIT_] != _PARENT_ && continue
+        for (k, v) in parent(node)
+            if is_arg(v) && !haskey(node, k)
                 # If key `k` is not already present in the current section, inherit arg (possibly an arg dict) from the parent section
-                contents(node)[k] = deepcopy(v)
+                node[k] = deepcopy(v)
             end
         end
-        delete!(contents(node), _INHERIT_)
+        delete!(node, _INHERIT_)
     end
 
     # Step 2:
@@ -285,10 +326,12 @@ function defaults!(cfg::Config; replace_arg_dicts = false)
     #   If found, copy default value from the corresponding field in the immediate parent (i.e. non-recursive).
     for node in StatelessBFS(cfg)
         parent(node) === nothing && continue
-        for (k,v) in collect(contents(node))
-            if arg_value(v) == _PARENT_
-                # Set arg value to the arg value of the parent (both parent and/or child may be arg dicts)
-                arg_value!(contents(node), arg_value(contents(parent(node)), k), k)
+        for (k, v) in deepcopy(node)
+            is_arg(v) && arg_value(v) == _PARENT_ || continue
+            if is_dict_arg(v)
+                node[k][arg_key()] = arg_value(parent(node)[k])
+            else
+                node[k] = arg_value(parent(node)[k])
             end
         end
     end
@@ -377,11 +420,11 @@ optional arguments:
 function ArgParse.add_arg_table!(settings::ArgParseSettings, cfg::Config)
     # Populate settings argument table
     for node in reverse(collect(PostOrderDFS(cfg)))
-        for (k,v) in contents(node)
+        for (k, v) in node
             if is_plain_arg(v)
                 # Add to arg table using specified value as the default
                 props = Dict{Symbol,Any}()
-                props[:default] = deepcopy(v)
+                props[:default] = arg_value(v)
                 props[:required] = false
 
                 if v isa AbstractVector
@@ -394,7 +437,8 @@ function ArgParse.add_arg_table!(settings::ArgParseSettings, cfg::Config)
                 add_arg_table!(settings, arg_table_flag(node, k), props)
 
             elseif is_dict_arg(v)
-                props, v = arg_props(v), arg_value(v)
+                props = arg_props(v)
+                v = arg_value(v)
 
                 # Special-casing specific properties
                 if :arg_type ∈ keys(props)
@@ -419,7 +463,7 @@ function ArgParse.add_arg_table!(settings::ArgParseSettings, cfg::Config)
                 if v == arg_required_value()
                     get!(props, :required, true)
                 else
-                    get!(props, :default, deepcopy(v))
+                    get!(props, :default, v)
                     get!(props, :required, false)
                     if v isa AbstractVector
                         get!(props, :arg_type, eltype(v))
@@ -517,11 +561,11 @@ function parse_args!(
     add_arg_table!(settings, default_cfg)
 
     # Parse `args_list` arguments into `cfg` using the dynamically constructed arg table
-    for (k,v) in parse_args(args_list, settings)
+    for (k, v) in parse_args(args_list, settings)
         if any(startswith("--" * k), args_list)
             # Only update `cfg` with new value if it was explicitly passed in `args_list`
             keys = String.(split(k, flag_delim()))
-            recurse_setindex!(contents(cfg), deepcopy(v), keys)
+            recurse_setindex!(cfg, deepcopy(v), keys)
         end
     end
 
@@ -531,9 +575,9 @@ function parse_args!(
     # Return parsed config
     if as_dict
         if as_symbols
-            return recurse_convert_keytype(contents(cfg), Symbol)
+            return recurse_convert_keytype(dict(cfg), Symbol)
         else
-            return contents(cfg)
+            return dict(cfg)
         end
     else
         return cfg
