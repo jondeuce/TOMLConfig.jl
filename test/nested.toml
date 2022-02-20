@@ -1,0 +1,13 @@
+a = [0]
+b = 0.0
+c = "c"
+[sec1]
+    _INHERIT_ = "_PARENT_"
+    a = [1]
+    [sec1.sub1]
+        _INHERIT_ = "_PARENT_"
+        c = "d"
+    [sec1.sub2]
+        _INHERIT_ = "_PARENT_"
+        b = "_PARENT_"
+        c = "d"

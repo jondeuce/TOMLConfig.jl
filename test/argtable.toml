@@ -1,0 +1,10 @@
+[a]
+    _ARG_ = "_REQUIRED_"
+    nargs = 2
+    arg_type = "Int"
+    required = true
+    help = "help string"
+[b]
+    _ARG_ = [1.0, 2.0]
+    nargs = "+"
+    help = "help string"

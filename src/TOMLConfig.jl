@@ -20,8 +20,26 @@ end
 @nospecialize # use only declared type signatures, helps with compile time
 
 """
+Leaf value representing an `ArgParse` argument table entry.
+"""
+struct ArgTableEntry
+    value::Any
+    props::Dict{Symbol, Any}
+    function ArgTableEntry(x::AbstractDict)
+        @assert haskey(x, arg_key())
+        value = x[arg_key()]
+        props = recurse_convert_keytype(delete!(deepcopy(x), arg_key()), Symbol)
+        return new(value, props)
+    end
+end
+arg_value(v) = v
+arg_value(v::ArgTableEntry) = v.value
+arg_props(v::ArgTableEntry) = v.props
+
+dict(v::ArgTableEntry) = Dict{String, Any}(arg_key() => v.value, (String(k) => v for (k, v) in v.props)...)
+
+"""
     Config(toml::AbstractDict{String})
-    Config(; filename::String)
 
 Basic tree structure for navigating TOML file contents.
 Each node in the `Config` tree represents a single section of a TOML file.
@@ -35,10 +53,10 @@ julia> using TOMLConfig
 julia> cfg = Config(TOML.parse(
        \"\"\"
        a = 1
-       
+
        [sec1]
            b = 2
-       
+
            [sec1.sub1]
            c = 3
        \"\"\"))
@@ -76,42 +94,54 @@ struct Config <: AbstractDict{String, Any}
     "Key within the parent node which points to this node, or `nothing` for the root node"
     key::Union{String, Nothing}
 
-    function Config(
-            x::Union{NamedTuple, AbstractDict} = Dict{String, Any}(),
-            parent::Union{Config, Nothing} = nothing,
-            key::Union{String, Nothing} = nothing;
-            filename::Union{String, Nothing} = nothing
-        )
-        if filename !== nothing
-            return Config(TOML.parsefile(filename))
-        end
-
-        contents = Dict{String, Any}()
-        cfg = new(contents, parent, key)
-        for (k, v) in pairs(x)
-            contents[String(k)] = v isa Union{NamedTuple, AbstractDict} ? Config(v, cfg, String(k)) : v
-        end
-
-        return cfg
-    end
+    # Disambiguation of vararg inputs
+    Config(contents::AbstractDict{String, Any}, ::Nothing, ::Nothing) = new(contents, nothing, nothing)
+    Config(contents::AbstractDict{String, Any}, parent::Config, key::String) = new(contents, parent, key)
 end
+
+# Constructors
+Config(x::AbstractDict) = new_root(x)
+Config(x::NamedTuple) = new_root(pairs(x))
+Config(; kw...) = Config(kw)
+Config(x...) = Config(Dict(x...))
+
+TOML.parsefile(::Type{Config}, filename::AbstractString) = Config(TOML.parsefile(filename))
 
 # Define getters to access struct fields, since `getproperty` is overloaded for convenience below
 contents(cfg::Config) = getfield(cfg, :contents)
 parent(cfg::Config) = getfield(cfg, :parent)
 key(cfg::Config) = getfield(cfg, :key)
 
+is_leaf(v) = true
+is_leaf(cfg::Config) = false
+is_root(cfg::Config) = parent(cfg) === nothing && key(cfg) === nothing
+
+function new_subtree(x::AbstractDict, parent::Union{Config, Nothing}, key::Union{String, Nothing})
+    cfg = Config(Dict{String, Any}(), parent, key)
+    for (k, v) in pairs(x)
+        if v isa AbstractDict
+            if haskey(v, arg_key())
+                cfg[k] = ArgTableEntry(v)
+            else
+                cfg[k] = new_subtree(v, cfg, String(k))
+            end
+        else
+            cfg[k] = v
+        end
+    end
+    return cfg
+end
+new_root(x) = new_subtree(x, nothing, nothing)
+
 function Base.show(io::IO, ::MIME"text/plain", cfg::Config)
     println(io, "TOML Config with contents:\n")
     TOML.print(io, dict(cfg))
 end
 
-dict(cfg::Config) = Dict{String, Any}(k => v isa Config ? dict(v) : v for (k, v) in cfg)
+# `AbstractDict` methods
+dict(cfg::Config) = Dict{String, Any}(k => v isa Union{Config, ArgTableEntry} ? dict(v) : v for (k, v) in cfg)
 
-assert_root(cfg::Config) = @assert parent(cfg) === nothing && key(cfg) === nothing
-
-# Forward `AbstractDict`s methods to `Config.contents`
-Base.getproperty(cfg::Config, k::String) = get!(cfg, k, Config(Dict{String, Any}(), cfg, k))
+Base.getproperty(cfg::Config, k::String) = get!(cfg, k) do; new_subtree(Dict{String, Any}(), cfg, k); end
 Base.getproperty(cfg::Config, k::Symbol) = getproperty(cfg, String(k))
 Base.getproperty(cfg::Config, k) = getproperty(cfg, String(k))
 
@@ -119,7 +149,7 @@ Base.setproperty!(cfg::Config, k::String, v) = contents(cfg)[k] = v
 Base.setproperty!(cfg::Config, k::Symbol, v) = setproperty!(cfg, String(k), v)
 Base.setproperty!(cfg::Config, k, v) = setproperty!(cfg, String(k), v)
 
-Base.propertynames(cfg::Config) = collect(keys(contents(cfg)))
+Base.propertynames(cfg::Config) = map(Symbol, collect(keys(cfg)))
 
 Base.getindex(cfg::Config, k) = getproperty(cfg, String(k))
 Base.setindex!(cfg::Config, v, k) = setproperty!(cfg, String(k), v)
@@ -130,21 +160,20 @@ Base.values(cfg::Config) = values(contents(cfg))
 Base.length(cfg::Config) = length(contents(cfg))
 Base.isempty(cfg::Config) = isempty(contents(cfg))
 Base.pairs(cfg::Config) = pairs(contents(cfg))
-Base.empty!(cfg::Config) = (assert_root(cfg); empty!(contents(cfg)); cfg)
+Base.delete!(cfg::Config, k) = delete!(contents(cfg), String(k))
+Base.empty!(cfg::Config) = (empty!(contents(cfg)); cfg)
 Base.get(cfg::Config, k, default) = get(contents(cfg), String(k), default)
 Base.get!(cfg::Config, k, default) = get!(contents(cfg), String(k), default)
+Base.get(f::Union{Function, Type}, cfg::Config, k) = get(f, contents(cfg), String(k))
+Base.get!(f::Union{Function, Type}, cfg::Config, k) = get!(f, contents(cfg), String(k))
 
-Base.delete!(cfg::Config, k) = delete!(contents(cfg), String(k))
-
-Base.isequal(a::Config, b::Config) = contents(a) == contents(b) && parent(a) == parent(b) && key(a) == key(b)
-Base.copy(cfg::Config) = Config(copy(contents(cfg)), parent(cfg) === nothing ? nothing : copy(parent(cfg)), key(cfg))
-Base.deepcopy(cfg::Config) = Config(deepcopy(contents(cfg)), parent(cfg) === nothing ? nothing : deepcopy(parent(cfg)), key(cfg))
-
-Base.merge(a::Config, b::Config) = merge!(copy(a), b)
+Base.isequal(a::Config, b::Config) = contents(a) == contents(b)
+Base.copy(cfg::Config) = is_root(cfg) ? new_root(copy(contents(cfg))) : new_subtree(copy(contents(cfg)), copy(parent(cfg)), key(cfg))
+Base.deepcopy(cfg::Config) = is_root(cfg) ? new_root(deepcopy(contents(cfg))) : new_subtree(deepcopy(contents(cfg)), deepcopy(parent(cfg)), key(cfg))
 
 function Base.merge!(a::Config, b::Config)
     for (k, v) in pairs(b)
-        if haskey(a, k) && v isa Config
+        if haskey(a, k) && (v isa Config)
             merge!(a[k], v)
         else
             a[k] = v
@@ -152,24 +181,18 @@ function Base.merge!(a::Config, b::Config)
     end
     return a
 end
+Base.merge(a::Config, b::Config) = merge!(deepcopy(a), b)
 
+# AbstractTrees interface
 AbstractTrees.nodetype(::Config) = Config
-AbstractTrees.children(parent::Config) = filter(is_child, collect(values(parent)))
+AbstractTrees.children(parent::Config) = filter(!is_leaf, collect(values(parent)))
 
 function AbstractTrees.printnode(io::IO, cfg::Config)
     if key(cfg) !== nothing
         println(io, key(cfg) * ":")
     end
-    print(io, join(["$k = $v" for (k, v) in cfg if !(v isa Config)], "\n"))
+    print(io, join(["$k = $(arg_value(v))" for (k, v) in cfg if is_leaf(v)], "\n"))
 end
-
-# Convenience functions for classifying nodes
-is_child(v) = !is_arg(v)
-is_arg(v) = is_plain_arg(v) || is_dict_arg(v)
-is_plain_arg(v) = !(v isa Config)
-is_dict_arg(v) = (v isa Config) && arg_key() ∈ keys(v)
-arg_props(v::Config) = recurse_convert_keytype(delete!(deepcopy(dict(v)), arg_key()), Symbol)
-arg_value(v) = is_dict_arg(v) ? deepcopy(v[arg_key()]) : deepcopy(v)
 
 # Convenience functions for getting/setting deeply nested nodes
 recurse_getindex(cfg::Config, keys) = foldl((dᵢ,k) -> dᵢ[k], keys; init = cfg)
@@ -179,14 +202,12 @@ recurse_convert_valtype(d::AbstractDict, ::Type{V} = Symbol) where {V} = Dict{ke
 recurse_convert_keyvaltype(d::AbstractDict, ::Type{K} = Symbol, ::Type{V} = Symbol) where {K, V} = Dict{K, Any}(K(k) => v isa AbstractDict ? recurse_convert_keyvaltype(v, K, V) : V(v) for (k, v) in d)
 
 """
-    parse_config(toml::AbstractDict{String})
-    parse_config(; filename::String)
+    parse_config(args...; filename::String, kwargs...)
 
-Convenience method for parsing configuration files. Equivalent to `ArgParse.parse_args(Config(toml))`
-and `ArgParse.parse_args(Config(; filename = filename))`, respectively.
+Convenience method for parsing configuration files.
+Equivalent to `ArgParse.parse_args(args..., TOML.parsefile(Config, filename); kwargs...)`.
 """
-parse_config(toml::AbstractDict{String}) = ArgParse.parse_args(Config(toml))
-parse_config(; filename::String) = ArgParse.parse_args(Config(; filename = filename))
+parse_config(args...; filename::String, kwargs...) = ArgParse.parse_args(args..., TOML.parsefile(Config, filename); kwargs...)
 
 """
     save_config(cfg::Union{Config, AbstractDict}; filename::AbstractString, kwargs...)
@@ -266,11 +287,11 @@ julia> cfg = TOMLConfig.defaults!(Config(TOML.parse(
        \"\"\"
        a = 1
        b = 2
-       
+
        [sec1]
        b = \"$(inherit_parent_value())\"
        c = 3
-       
+
            [sec1.sub1]
            $(inherit_all_key()) = \"$(inherit_parent_value())\"
        \"\"\")))
@@ -297,7 +318,7 @@ function defaults!(cfg::Config; replace_arg_dicts = false)
     if replace_arg_dicts
         for node in StatelessBFS(cfg)
             for (k, v) in node
-                if is_dict_arg(v)
+                if v isa ArgTableEntry
                     node[k] = arg_value(v)
                 end
             end
@@ -309,11 +330,11 @@ function defaults!(cfg::Config; replace_arg_dicts = false)
     #   If found, copy all key-value pairs from the immediate parent (i.e. non-recursive) into the node containing "_INHERIT_".
     #   Delete the "_INHERIT_" key afterwards.
     for node in reverse(collect(StatelessBFS(cfg)))
-        parent(node) === nothing && continue
+        is_root(node) && continue
         !haskey(node, _INHERIT_) && continue
         node[_INHERIT_] != _PARENT_ && continue
         for (k, v) in parent(node)
-            if is_arg(v) && !haskey(node, k)
+            if is_leaf(v) && !haskey(node, k)
                 # If key `k` is not already present in the current section, inherit arg (possibly an arg dict) from the parent section
                 node[k] = deepcopy(v)
             end
@@ -325,10 +346,10 @@ function defaults!(cfg::Config; replace_arg_dicts = false)
     #   Breadth-first search for fields with value "_PARENT_".
     #   If found, copy default value from the corresponding field in the immediate parent (i.e. non-recursive).
     for node in StatelessBFS(cfg)
-        parent(node) === nothing && continue
+        is_root(node) && continue
         for (k, v) in deepcopy(node)
-            is_arg(v) && arg_value(v) == _PARENT_ || continue
-            if is_dict_arg(v)
+            is_leaf(v) && arg_value(v) == _PARENT_ || continue
+            if v isa ArgTableEntry
                 node[k][arg_key()] = arg_value(parent(node)[k])
             else
                 node[k] = arg_value(parent(node)[k])
@@ -371,7 +392,7 @@ The corresponding flags that will be generated are
 function arg_table_flag(cfg::Config, k::String)
     flag = k
     while true
-        if parent(cfg) === nothing
+        if is_root(cfg)
             flag = "--" * flag
             return flag
         else
@@ -395,10 +416,10 @@ julia> cfg = Config(TOML.parse(
        \"\"\"
        a = 1.0
        b = 2
-       
+
        [sec1]
        c = [3, 4]
-       
+
            [sec1.sub1]
            d = "d"
        \"\"\"));
@@ -421,7 +442,9 @@ function ArgParse.add_arg_table!(settings::ArgParseSettings, cfg::Config)
     # Populate settings argument table
     for node in reverse(collect(PostOrderDFS(cfg)))
         for (k, v) in node
-            if is_plain_arg(v)
+            is_leaf(v) || continue
+
+            if !(v isa ArgTableEntry)
                 # Add to arg table using specified value as the default
                 props = Dict{Symbol,Any}()
                 props[:default] = arg_value(v)
@@ -436,7 +459,7 @@ function ArgParse.add_arg_table!(settings::ArgParseSettings, cfg::Config)
 
                 add_arg_table!(settings, arg_table_flag(node, k), props)
 
-            elseif is_dict_arg(v)
+            else
                 props = arg_props(v)
                 v = arg_value(v)
 
@@ -512,11 +535,11 @@ julia> cfg = Config(TOML.parse(
        \"\"\"
        a = 1
        b = 2
-       
+
        [sec1]
        b = \"$(inherit_parent_value())\"
        c = 3
-       
+
            [sec1.sub1]
            $(inherit_all_key()) = \"$(inherit_parent_value())\"
        \"\"\"));
