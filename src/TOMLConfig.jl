@@ -20,7 +20,10 @@ end
 @nospecialize # use only declared type signatures, helps with compile time
 
 """
-Leaf value representing an `ArgParse` argument table entry.
+    ArgTableEntry
+
+Internal struct used to define leaf values which represent `ArgParse` argument table entries,
+storing e.g. properties of the corresponding command line argument; see `ArgParse.add_arg_table!`.
 """
 struct ArgTableEntry
     value::Any
@@ -47,16 +50,18 @@ Children of a `Config` node are the corresponding TOML subsections, if they exis
 
 # Examples
 
+Construct a `Config` from a TOML string literal, parsed using the `TOML` standard library:
+
 ```jldoctest
 julia> using TOMLConfig
 
 julia> cfg = Config(TOML.parse(
        \"\"\"
        a = 1
-
+       
        [sec1]
            b = 2
-
+       
            [sec1.sub1]
            c = 3
        \"\"\"))
@@ -82,6 +87,31 @@ julia> cfg.sec1.sub1
 TOML Config with contents:
 
 c = 3
+```
+
+`Config` can also be constructed incrementally:
+
+```jldoctest
+julia> using TOMLConfig
+
+julia> cfg = Config();
+
+julia> cfg.a = 1;
+
+julia> cfg.b.c.d = "three"; # Nested fields will be dynamically set, if they don't exist
+
+julia> cfg["b"]["e"] = [2]; # getindex!/setindex! and getproperty!/setproperty! are all supported
+
+julia> cfg
+TOML Config with contents:
+
+a = 1
+
+[b]
+e = [2]
+
+    [b.c]
+    d = "three"
 ```
 """
 struct Config <: AbstractDict{String, Any}
@@ -287,11 +317,11 @@ julia> cfg = TOMLConfig.defaults!(Config(TOML.parse(
        \"\"\"
        a = 1
        b = 2
-
+       
        [sec1]
        b = \"$(inherit_parent_value())\"
        c = 3
-
+       
            [sec1.sub1]
            $(inherit_all_key()) = \"$(inherit_parent_value())\"
        \"\"\")))
@@ -369,24 +399,36 @@ of the current node using the delimiter `flag_delim()` and prepending "--".
 
 # Examples
 
-Given a `Config` node with contents
-```julia
+```jldoctest
+julia> using TOMLConfig
+
+julia> cfg = Config();
+
+julia> cfg.a = 1;
+
+julia> cfg.sec1.b = 2;
+
+julia> cfg.sec1.sub1.c = 3;
+
+julia> cfg
+TOML Config with contents:
+
 a = 1
-b = 2
 
 [sec1]
-c = 3
+b = 2
 
     [sec1.sub1]
-    d = 4
-```
+    c = 3
 
-The corresponding flags that will be generated are
-```julia
---a
---b
---sec1$(flag_delim())c
---sec1$(flag_delim())sub1$(flag_delim())d
+julia> TOMLConfig.arg_table_flag(cfg, "a")
+"--a"
+
+julia> TOMLConfig.arg_table_flag(cfg.sec1, "b")
+"--sec1.b"
+
+julia> TOMLConfig.arg_table_flag(cfg.sec1.sub1, "c")
+"--sec1.sub1.c"
 ```
 """
 function arg_table_flag(cfg::Config, k::String)
@@ -416,10 +458,10 @@ julia> cfg = Config(TOML.parse(
        \"\"\"
        a = 1.0
        b = 2
-
+       
        [sec1]
        c = [3, 4]
-
+       
            [sec1.sub1]
            d = "d"
        \"\"\"));
@@ -535,11 +577,11 @@ julia> cfg = Config(TOML.parse(
        \"\"\"
        a = 1
        b = 2
-
+       
        [sec1]
        b = \"$(inherit_parent_value())\"
        c = 3
-
+       
            [sec1.sub1]
            $(inherit_all_key()) = \"$(inherit_parent_value())\"
        \"\"\"));
