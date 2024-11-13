@@ -59,10 +59,8 @@ julia> using TOMLConfig
 julia> cfg = Config(TOML.parse(
        \"\"\"
        a = 1
-
        [sec1]
            b = 2
-
            [sec1.sub1]
            c = 3
        \"\"\"))
@@ -317,11 +315,9 @@ julia> cfg = TOMLConfig.defaults!(Config(TOML.parse(
        \"\"\"
        a = 1
        b = 2
-
        [sec1]
        b = \"$(inherit_parent_value())\"
        c = 3
-
            [sec1.sub1]
            $(inherit_all_key()) = \"$(inherit_parent_value())\"
        \"\"\")))
@@ -458,10 +454,8 @@ julia> cfg = Config(TOML.parse(
        \"\"\"
        a = 1.0
        b = 2
-
        [sec1]
        c = [3, 4]
-
            [sec1.sub1]
            d = "d"
        \"\"\"));
@@ -577,11 +571,9 @@ julia> cfg = Config(TOML.parse(
        \"\"\"
        a = 1
        b = 2
-
        [sec1]
        b = \"$(inherit_parent_value())\"
        c = 3
-
            [sec1.sub1]
            $(inherit_all_key()) = \"$(inherit_parent_value())\"
        \"\"\"));
