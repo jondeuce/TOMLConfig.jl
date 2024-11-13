@@ -9,7 +9,8 @@ using AbstractTrees
 using Dates
 using Reexport
 
-@reexport using ArgParse, TOML
+@reexport using ArgParse
+@reexport using TOML
 
 export Config
 
@@ -58,10 +59,10 @@ julia> using TOMLConfig
 julia> cfg = Config(TOML.parse(
        \"\"\"
        a = 1
-       
+
        [sec1]
            b = 2
-       
+
            [sec1.sub1]
            c = 3
        \"\"\"))
@@ -139,12 +140,12 @@ TOML.parsefile(::Type{Config}, filename::AbstractString) = Config(TOML.parsefile
 
 # Define getters to access struct fields, since `getproperty` is overloaded for convenience below
 contents(cfg::Config) = getfield(cfg, :contents)
-parent(cfg::Config) = getfield(cfg, :parent)
-key(cfg::Config) = getfield(cfg, :key)
+parentnode(cfg::Config) = getfield(cfg, :parent)
+parentkey(cfg::Config) = getfield(cfg, :key)
 
 is_leaf(v) = true
 is_leaf(cfg::Config) = false
-is_root(cfg::Config) = parent(cfg) === nothing && key(cfg) === nothing
+is_root(cfg::Config) = parentnode(cfg) === nothing && parentkey(cfg) === nothing
 
 function new_subtree(x::AbstractDict, parent::Union{Config, Nothing}, key::Union{String, Nothing})
     cfg = Config(Dict{String, Any}(), parent, key)
@@ -198,8 +199,7 @@ Base.get(f::Union{Function, Type}, cfg::Config, k) = get(f, contents(cfg), Strin
 Base.get!(f::Union{Function, Type}, cfg::Config, k) = get!(f, contents(cfg), String(k))
 
 Base.isequal(a::Config, b::Config) = contents(a) == contents(b)
-Base.copy(cfg::Config) = is_root(cfg) ? new_root(copy(contents(cfg))) : new_subtree(copy(contents(cfg)), copy(parent(cfg)), key(cfg))
-Base.deepcopy(cfg::Config) = is_root(cfg) ? new_root(deepcopy(contents(cfg))) : new_subtree(deepcopy(contents(cfg)), deepcopy(parent(cfg)), key(cfg))
+Base.copy(cfg::Config) = deepcopy(cfg)
 
 function Base.merge!(a::Config, b::Config)
     for (k, v) in pairs(b)
@@ -218,8 +218,8 @@ AbstractTrees.nodetype(::Config) = Config
 AbstractTrees.children(parent::Config) = filter(!is_leaf, collect(values(parent)))
 
 function AbstractTrees.printnode(io::IO, cfg::Config)
-    if key(cfg) !== nothing
-        println(io, key(cfg) * ":")
+    if parentkey(cfg) !== nothing
+        println(io, parentkey(cfg) * ":")
     end
     print(io, join(["$k = $(arg_value(v))" for (k, v) in cfg if is_leaf(v)], "\n"))
 end
@@ -317,11 +317,11 @@ julia> cfg = TOMLConfig.defaults!(Config(TOML.parse(
        \"\"\"
        a = 1
        b = 2
-       
+
        [sec1]
        b = \"$(inherit_parent_value())\"
        c = 3
-       
+
            [sec1.sub1]
            $(inherit_all_key()) = \"$(inherit_parent_value())\"
        \"\"\")))
@@ -363,7 +363,7 @@ function defaults!(cfg::Config; replace_arg_dicts = false)
         is_root(node) && continue
         !haskey(node, _INHERIT_) && continue
         node[_INHERIT_] != _PARENT_ && continue
-        for (k, v) in parent(node)
+        for (k, v) in parentnode(node)
             if is_leaf(v) && !haskey(node, k)
                 # If key `k` is not already present in the current section, inherit arg (possibly an arg dict) from the parent section
                 node[k] = deepcopy(v)
@@ -380,9 +380,9 @@ function defaults!(cfg::Config; replace_arg_dicts = false)
         for (k, v) in deepcopy(node)
             is_leaf(v) && arg_value(v) == _PARENT_ || continue
             if v isa ArgTableEntry
-                node[k][arg_key()] = arg_value(parent(node)[k])
+                node[k][arg_key()] = arg_value(parentnode(node)[k])
             else
-                node[k] = arg_value(parent(node)[k])
+                node[k] = arg_value(parentnode(node)[k])
             end
         end
     end
@@ -438,8 +438,8 @@ function arg_table_flag(cfg::Config, k::String)
             flag = "--" * flag
             return flag
         else
-            flag = key(cfg) * flag_delim() * flag
-            cfg = parent(cfg)
+            flag = parentkey(cfg) * flag_delim() * flag
+            cfg = parentnode(cfg)
         end
     end
 end
@@ -458,10 +458,10 @@ julia> cfg = Config(TOML.parse(
        \"\"\"
        a = 1.0
        b = 2
-       
+
        [sec1]
        c = [3, 4]
-       
+
            [sec1.sub1]
            d = "d"
        \"\"\"));
@@ -577,11 +577,11 @@ julia> cfg = Config(TOML.parse(
        \"\"\"
        a = 1
        b = 2
-       
+
        [sec1]
        b = \"$(inherit_parent_value())\"
        c = 3
-       
+
            [sec1.sub1]
            $(inherit_all_key()) = \"$(inherit_parent_value())\"
        \"\"\"));

@@ -1,6 +1,11 @@
 using Test
 using TOMLConfig
-using Dates, Random
+using TOMLConfig: contents, parentnode, parentkey
+using Aqua, Dates, Random
+
+@testset "aqua" begin
+    Aqua.test_all(TOMLConfig)
+end
 
 struct NoException <: Exception end
 
@@ -61,22 +66,36 @@ end
     @test get(cfg, "e", 5) == 5
     @test !haskey(cfg, "e")
 
-    @test get(cfg, "e") do; 5; end == 5
+    @test get(() -> 5, cfg, "e") == 5
     @test !haskey(cfg, "e")
 
     @test get!(cfg, "e", 5) == 5
-    @test haskey(cfg, "e"); delete!(cfg, "e"); @test !haskey(cfg, "e")
+    @test haskey(cfg, "e")
+    delete!(cfg, "e")
+    @test !haskey(cfg, "e")
 
-    @test get!(cfg, "e") do; 5; end == 5
-    @test haskey(cfg, "e"); delete!(cfg, "e"); @test !haskey(cfg, "e")
+    @test get!(() -> 5, cfg, "e") == 5
+    @test haskey(cfg, "e")
+    delete!(cfg, "e")
+    @test !haskey(cfg, "e")
 
-    @test merge(cfg, Config((e=5,))) == Config(; a=1, b=2, c=[3], d=Dict("e"=>[4]), e=5)
+    @test merge(cfg, Config((; e = 5))) == Config(; a = 1, b = 2, c = [3], d = Dict("e" => [4]), e = 5)
 
     @test cfg == copy(cfg)
     @test cfg == deepcopy(cfg)
 
     @test empty!(cfg) == Config()
     @test isempty(cfg)
+
+    cfg = Config()
+    cfg.a = [1]
+    cfg.b.c = [2, 3]
+    @test cfg.a !== copy(cfg).a
+    @test cfg.b.c !== copy(cfg).b.c
+    @test cfg.b.c !== copy(cfg.b).c
+    @test contents(cfg.b) !== contents(copy(cfg.b))
+    @test parentnode(cfg.b) !== parentnode(copy(cfg.b))
+    @test parentkey(cfg.b) == parentkey(copy(cfg.b)) == "b"
 end
 
 @testset "basic parsing" begin
@@ -113,7 +132,7 @@ end
 
         cfg = Config(deepcopy(template))
         cfg.a = 1
-        cfg.sec1.c = [3,4,5]
+        cfg.sec1.c = [3, 4, 5]
         cfg.sec1.sub1.d = [5.5]
         cfg.sec1.sub2.f = Date("2021-06-01")
         cfg.sec1.sub2.g = DateTime("2021-06-01T12:34:56")
@@ -134,7 +153,7 @@ end
             ["--sec1.sub2.g", "01:00:00"],
             ["--sec1.sub2.h", "2013-01-01"],
         ]
-            settings = ArgParseSettings(exc_handler = ArgParse.debug_handler)
+            settings = ArgParseSettings(; exc_handler = ArgParse.debug_handler)
             @test_throws ArgParseError parse_args(args_list, settings, Config(deepcopy(template)))
         end
     end
@@ -200,8 +219,8 @@ end
                 !TOMLConfig.is_leaf(v) && continue # only replace args, not child dicts
                 rand(MersenneTwister(seed += 1)) > 0.5 && continue # flip coin
                 node[k] = !(v isa TOMLConfig.ArgTableEntry) ?
-                    Dict{String, Any}(TOMLConfig.arg_key() => TOMLConfig.arg_value(v)) :
-                    TOMLConfig.arg_value(v)
+                          Dict{String, Any}(TOMLConfig.arg_key() => TOMLConfig.arg_value(v)) :
+                          TOMLConfig.arg_value(v)
             end
         end
         return toml
@@ -223,7 +242,7 @@ end
 
 @testset "arg dict properties" begin
     template = TOML.parsefile(joinpath(@__DIR__, "argtable.toml"))
-    debug_parse_args = (args_list) -> parse_args(args_list, ArgParseSettings(exc_handler = ArgParse.debug_handler), Config(deepcopy(template)))
+    debug_parse_args = args_list -> parse_args(args_list, ArgParseSettings(; exc_handler = ArgParse.debug_handler), Config(deepcopy(template)))
     @test_throws ArgParseError debug_parse_args(String[]) # --a is required
     @test_throws ArgParseError debug_parse_args(["--a", "3.0", "4.0"]) # --a must be Int
     @test_throws ArgParseError debug_parse_args(["--a", "3"]) # --a requires two args
