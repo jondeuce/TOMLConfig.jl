@@ -164,7 +164,7 @@ new_root(x) = new_subtree(x, nothing, nothing)
 
 function Base.show(io::IO, ::MIME"text/plain", cfg::Config)
     println(io, "TOML Config with contents:\n")
-    TOML.print(io, dict(cfg))
+    TOML.print(io, dict(cfg); sorted = true)
 end
 
 # `AbstractDict` methods
@@ -213,7 +213,7 @@ Base.merge(a::Config, b::Config) = merge!(deepcopy(a), b)
 
 # AbstractTrees interface
 AbstractTrees.nodetype(::Config) = Config
-AbstractTrees.children(parent::Config) = filter(!is_leaf, collect(values(parent)))
+AbstractTrees.children(parent::Config) = filter(!is_leaf, [parent[k] for k in sort!(collect(keys(parent)))])
 
 function AbstractTrees.printnode(io::IO, cfg::Config)
     if parentkey(cfg) !== nothing
@@ -323,16 +323,16 @@ julia> cfg = TOMLConfig.defaults!(Config(TOML.parse(
        \"\"\")))
 TOML Config with contents:
 
-b = 2
 a = 1
+b = 2
 
 [sec1]
-c = 3
 b = 2
+c = 3
 
     [sec1.sub1]
-    c = 3
     b = 2
+    c = 3
 ```
 """
 function defaults!(cfg::Config; replace_arg_dicts = false)
@@ -463,12 +463,12 @@ julia> cfg = Config(TOML.parse(
 julia> settings = add_arg_table!(ArgParseSettings(prog = "myscript.jl"), cfg);
 
 julia> ArgParse.show_help(settings; exit_when_done = false)
-usage: myscript.jl [--b B] [--a A] [--sec1.c [SEC1.C...]]
+usage: myscript.jl [--a A] [--b B] [--sec1.c [SEC1.C...]]
                    [--sec1.sub1.d SEC1.SUB1.D]
 
 optional arguments:
-  --b B                 (type: Int64, default: 2)
   --a A                 (type: Float64, default: 1.0)
+  --b B                 (type: Int64, default: 2)
   --sec1.c [SEC1.C...]  (type: Int64, default: [3, 4])
   --sec1.sub1.d SEC1.SUB1.D
                         (default: "d")
@@ -477,7 +477,8 @@ optional arguments:
 function ArgParse.add_arg_table!(settings::ArgParseSettings, cfg::Config)
     # Populate settings argument table
     for node in reverse(collect(PostOrderDFS(cfg)))
-        for (k, v) in node
+        for k in sort!(collect(keys(node)))
+            v = node[k]
             is_leaf(v) || continue
 
             if !(v isa ArgTableEntry)
@@ -581,16 +582,16 @@ julia> cfg = Config(TOML.parse(
 julia> parsed_args = parse_args(["--a", "3", "--sec1.b", "5", "--sec1.c", "10"], cfg)
 TOML Config with contents:
 
-b = 2
 a = 3
+b = 2
 
 [sec1]
-c = 10
 b = 5
+c = 10
 
     [sec1.sub1]
-    c = 10
     b = 5
+    c = 10
 ```
 """
 function ArgParse.parse_args(args_list::Vector, settings::ArgParseSettings, cfg::Config; kwargs...)
